@@ -88,8 +88,7 @@ module IOCP.PSQ
     , atMost
     ) where
 
-import Data.Maybe (Maybe(..))
-import GHC.Base
+import GHC.Base hiding (empty)
 import GHC.Num (Num(..))
 import GHC.Show (Show(showsPrec))
 import Data.Unique (Unique)
@@ -482,4 +481,3 @@ seqToList (Sequ x) = x []
 
 instance Show a => Show (Sequ a) where
     showsPrec d a = showsPrec d (seqToList a)
-

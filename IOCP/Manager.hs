@@ -205,6 +205,13 @@ unregisterTimeout mgr (TK key) =
 
 newtype Mgr a = Mgr { runMgr :: TimeoutQueue -> IO (a, TimeoutQueue) }
 
+instance Functor Mgr where
+    fmap = liftM
+
+instance Applicative Mgr where
+    pure  = return
+    (<*>) = ap
+
 instance Monad Mgr where
     return a = Mgr $ \s -> return (a, s)
     m >>= k = Mgr $ \s -> do

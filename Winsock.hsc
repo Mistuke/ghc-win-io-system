@@ -15,6 +15,7 @@ module Winsock (
     send,
 ) where
 
+#include <winsock2.h>
 #include <windows.h>
 
 ##ifdef mingw32_HOST_OS
@@ -31,7 +32,6 @@ import IOCP.Manager             (Overlapped(..))
 import qualified IOCP.FFI     as FFI
 import qualified IOCP.Manager as Mgr
 
-import Control.Applicative      ((<$>))
 import Control.Monad            (void)
 import Data.ByteString          (ByteString)
 import Data.ByteString.Internal (createAndTrim)

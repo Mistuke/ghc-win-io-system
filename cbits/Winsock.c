@@ -1,7 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
-#include <windows.h>
 #include <winsock2.h>
+#include <windows.h>
 #include <ws2tcpip.h>
 #include <mswsock.h>
 
