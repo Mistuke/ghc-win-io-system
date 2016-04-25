@@ -42,3 +42,63 @@ library
                     , containers
                     , Win32
                     , network
+
+executable clock
+    main-is: clock.hs
+    hs-source-dirs: testing
+    build-depends: ansi-terminal, base, iocp
+    ghc-options: -threaded
+
+executable close-while-pending
+    main-is: close-while-pending.hs
+    hs-source-dirs: testing
+    build-depends: base, bytestring, iocp, network
+    ghc-options: -threaded
+
+executable close-without-shutdown
+    main-is: close-without-shutdown.hs
+    hs-source-dirs: testing
+    build-depends: base, bytestring, iocp, network
+    ghc-options: -threaded
+
+executable monotonic-time
+    main-is: monotonic-time.hs
+    hs-source-dirs: testing
+    build-depends: ansi-terminal, base, iocp
+    ghc-options: -threaded
+
+executable recv-bench
+    main-is: recv-bench.hs
+    hs-source-dirs: testing
+    build-depends: base, bytestring, criterion, iocp, network
+    ghc-options: -threaded
+
+executable recv
+    main-is: recv.hs
+    hs-source-dirs: testing
+    build-depends: base, iocp, network
+    ghc-options: -threaded
+
+executable send-buffer-full
+    main-is: send-buffer-full.hs
+    hs-source-dirs: testing
+    build-depends: base, bytestring, iocp, network
+    ghc-options: -threaded
+
+executable send
+    main-is: send.hs
+    hs-source-dirs: testing
+    build-depends: base, bytestring, iocp, network
+    ghc-options: -threaded
+
+executable send-recv
+    main-is: send-recv.hs
+    hs-source-dirs: testing
+    build-depends: base, bytestring, iocp, network
+    ghc-options: -threaded
+
+executable trivial
+    main-is: trivial.hs
+    hs-source-dirs: testing
+    build-depends: base, iocp, network
+    ghc-options: -threaded

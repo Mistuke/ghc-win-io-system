@@ -5,6 +5,7 @@ import Control.Exception
 import Control.Monad
 import Data.List
 import Data.Maybe
+import System.IO
 import System.IO.Error
 
 -- From the ansi-terminal package.  Used to remove blank lines introduced by
@@ -16,6 +17,7 @@ handleEOF = handleJust (guard . isEOFError) (\_ -> return ())
 
 main :: IO ()
 main = do
+    mapM_ (`hSetBuffering` LineBuffering) [stdout, stderr]
     gtc64 <- loadGetTickCount64
     freq  <- queryPerformanceFrequency
 

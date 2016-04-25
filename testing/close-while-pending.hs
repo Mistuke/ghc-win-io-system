@@ -1,5 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS -Wall -fno-warn-missing-signatures -fno-warn-name-shadowing #-}
+module Main where
+
 import Prelude hiding (log)
 
 import Control.Concurrent
@@ -7,8 +9,9 @@ import Control.Exception as E
 import Control.Monad
 import Data.ByteString.Char8 ()
 import Network              (PortID(..))
-import Network.Socket       (Family(..), SocketType(..), PortNumber, SockAddr(..),
-                             defaultProtocol, inet_addr)
+import Network.Socket       (Family(..), SocketType(..), PortNumber
+                            , SockAddr(..)
+                            , defaultProtocol, inet_addr)
 import System.IO
 import Winsock
 import qualified Network as N
@@ -20,7 +23,8 @@ server = void $ forkIO $ do
     sock <- N.listenOn $ PortNumber portNum
     (h, host, port) <- N.accept sock
     hSetBuffering h NoBuffering
-    let log msg = putStrLn $ "server: " ++ host ++ ":" ++ show port ++ ": " ++ msg
+    let log msg = putStrLn $ "server: " ++ host
+                  ++ ":" ++ show port ++ ": " ++ msg
     log "accepted connection"
     threadDelay 100000000
     log "closing connection"

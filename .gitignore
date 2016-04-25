@@ -1,2 +1,5 @@
 /dist
+/.cabal-sandbox
 *.sw[nop]
+TAGS
+cabal.sandbox.config

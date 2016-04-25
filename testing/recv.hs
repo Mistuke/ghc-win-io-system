@@ -1,11 +1,13 @@
 {-# OPTIONS -Wall -fno-warn-missing-signatures -fno-warn-name-shadowing #-}
+module Main where
+
 import Prelude hiding (log)
 
 import Control.Concurrent
 import Control.Monad        (forever, void)
 import Network              (PortID(..))
-import Network.Socket       (Family(..), SocketType(..), PortNumber, SockAddr(..),
-                             defaultProtocol, inet_addr)
+import Network.Socket       (Family(..), SocketType(..), PortNumber
+                            , SockAddr(..), defaultProtocol, inet_addr)
 import System.IO
 import Winsock
 import qualified Network as N
@@ -17,7 +19,8 @@ server = do
     sock <- N.listenOn $ PortNumber portNum
     void $ forkIO $ forever $ do
         (h, host, port) <- N.accept sock
-        let log msg = putStrLn $ "server: " ++ host ++ ":" ++ show port ++ ": " ++ msg
+        let log msg = putStrLn $ "server: " ++ host
+                      ++ ":" ++ show port ++ ": " ++ msg
         log "accepted connection"
         threadDelay 1000000
         log "sending message"

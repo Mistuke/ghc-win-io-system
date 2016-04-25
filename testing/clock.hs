@@ -1,9 +1,12 @@
+module Main where
+
 import IOCP.Clock
 
 import Control.Applicative
 import Control.Exception
 import Control.Monad
 import Data.Maybe
+import System.IO
 import System.IO.Error
 
 -- From the ansi-terminal package.  Used to remove blank lines introduced by
@@ -30,6 +33,7 @@ pad n str = str ++ replicate (n - length str) ' '
 
 main :: IO ()
 main = do
+    mapM_ (`hSetBuffering` LineBuffering) [stdout, stderr]
     gtc   <- getTickCount
     gtc64 <- getTickCount64
     qpc   <- queryPerformanceCounter

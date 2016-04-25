@@ -3,21 +3,24 @@
 
 {-# OPTIONS -fno-warn-missing-signatures #-}
 import Network.Socket hiding (socket, connect)
-import Winsock
+import qualified Winsock
 
 import Control.Concurrent   (threadDelay)
 import Control.Exception    (finally)
 import Control.Monad        (forever)
+import System.IO
 import System.Timeout       (timeout)
 
 googleIP = "74.125.140.138"
 
 main = do
+    mapM_ (`hSetBuffering` LineBuffering) [stdout, stderr]
     forever $ timeout 1000000 $ do
         putStrLn "Connecting"
-        sock <- socket AF_INET Stream defaultProtocol
+        sock <- Winsock.socket AF_INET Stream defaultProtocol
         addr <- inet_addr googleIP
-        connect sock (SockAddrInet 1234 addr) `finally` Winsock.close sock
+        Winsock.connect sock (SockAddrInet 1234 addr)
+                   `finally` Winsock.close sock
 
         -- Avoid making successful connections repeatedly.
         threadDelay 10000000

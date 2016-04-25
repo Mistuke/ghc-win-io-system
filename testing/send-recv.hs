@@ -2,14 +2,16 @@
 
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS -Wall -fno-warn-missing-signatures -fno-warn-name-shadowing #-}
+module Main where
+
 import Prelude hiding (log)
 
 import Control.Concurrent
 import Control.Monad
 import Data.IORef
 import Network              (PortID(..))
-import Network.Socket       (Family(..), SocketType(..), PortNumber, SockAddr(..),
-                             defaultProtocol, inet_addr)
+import Network.Socket       (Family(..), SocketType(..), PortNumber
+                            , SockAddr(..), defaultProtocol, inet_addr)
 import System.IO
 import System.Timeout       (timeout)
 import Winsock
@@ -27,7 +29,8 @@ server mv = void $ forkIO $ do
     sock <- N.listenOn $ PortNumber portNum
     (h, host, port) <- N.accept sock
     hSetBuffering h NoBuffering
-    let log msg = putStrLn $ "server: " ++ host ++ ":" ++ show port ++ ": " ++ msg
+    let log msg = putStrLn $ "server: " ++ host
+                  ++ ":" ++ show port ++ ": " ++ msg
     log "accepted connection"
 
     takeMVar mv
