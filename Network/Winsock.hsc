@@ -1,7 +1,7 @@
 {-# LANGUAGE DoAndIfThenElse #-}
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE ForeignFunctionInterface #-}
-module Winsock (
+module Network.Winsock (
     Socket(..),
     SOCKET,
     socket,
@@ -28,9 +28,9 @@ module Winsock (
 ## endif
 ##endif
 
-import IOCP.Manager             (Overlapped(..))
-import qualified IOCP.FFI     as FFI
-import qualified IOCP.Manager as Mgr
+import GHC.Event.Windows               (Overlapped(..))
+import qualified GHC.Event.Windows.FFI as FFI
+import qualified GHC.Event.Windows     as Mgr
 
 import Control.Monad            (void)
 import Data.ByteString          (ByteString)

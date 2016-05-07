@@ -1,8 +1,10 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DoAndIfThenElse #-}
+{-# LANGUAGE ForeignFunctionInterface #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE RecordWildCards #-}
-module IOCP.Manager (
+module GHC.Event.Windows (
     -- * Manager
     Manager,
     new,
@@ -24,44 +26,54 @@ module IOCP.Manager (
     unregisterTimeout,
 ) where
 
-import IOCP.Clock   (Clock, Seconds, getClock, getTime)
-import IOCP.FFI     (Overlapped(..))
-import IOCP.Worker  (Worker, forkOSUnmasked)
-import qualified IOCP.FFI    as FFI
-import qualified IOCP.PSQ    as Q
-import qualified IOCP.Worker as Worker
+import GHC.Event.Windows.Clock   (Clock, Seconds, getClock, getTime)
+import GHC.Event.Windows.FFI     (Overlapped(..))
+import GHC.Event.Windows.Worker  (Worker, forkOSUnmasked)
+import qualified GHC.Event.Windows.FFI    as FFI
+import qualified GHC.Event.Windows.Worker as Worker
+import qualified GHC.Event.PSQ            as Q
 
-import Control.Concurrent
 import Control.Exception as E
-import Control.Monad
+import Control.Concurrent
+import Data.Either
 import Data.IORef
+import Data.Maybe
+import Data.Tuple
 import Data.Word
-import Data.Unique
-import Debug.Trace          (traceIO)
+import Foreign.C.String
 import Foreign.Ptr
+import GHC.Base
+-- import GHC.Conc.Sync
+import GHC.Event.Unique
+-- import GHC.MVar
+import GHC.Num
+import GHC.Real
+import GHC.Show
+import GHC.Windows
 import System.IO.Unsafe     (unsafeInterleaveIO, unsafePerformIO)
-import System.Win32.Types
 
-import qualified Data.IntMap as IM
+import qualified GHC.Event.IntMap as IM
 
 ------------------------------------------------------------------------
 -- Manager
 
 data Manager = Manager
-    { mgrIOCP      :: !(FFI.IOCP ManagerCallback)
-    , mgrClock     :: !Clock
-    , mgrWorkers   :: WorkerList
-    , mgrWorkerMap :: !(IORef WorkerMap)
+    { mgrIOCP         :: !(FFI.IOCP ManagerCallback)
+    , mgrClock        :: !Clock
+    , mgrUniqueSource :: !UniqueSource
+    , mgrWorkers      :: WorkerList
+    , mgrWorkerMap    :: !(IORef WorkerMap)
     }
 
 type ManagerCallback = ErrCode -> DWORD -> Mgr ()
 
 new :: IO Manager
 new = do
-    mgrIOCP      <- FFI.newIOCP
-    mgrClock     <- getClock
-    mgrWorkers   <- newWorkerList
-    mgrWorkerMap <- newIORef IM.empty
+    mgrIOCP         <- FFI.newIOCP
+    mgrClock        <- getClock
+    mgrUniqueSource <- newSource
+    mgrWorkers      <- newWorkerList
+    mgrWorkerMap    <- newIORef IM.empty
     let mgr = Manager{..}
     _tid <- forkOSUnmasked $ loop mgr
     return mgr
@@ -125,8 +137,11 @@ withOverlapped :: Manager
                -> IO a
 withOverlapped mgr h offset startCB completionCB = do
     signal <- newEmptyMVar
-    let signalReturn a = void $ tryPutMVar signal $ return a
-        signalThrow ex = void $ tryPutMVar signal $ throwIO (ex :: SomeException)
+    let signalReturn a = do _ <- tryPutMVar signal $ return a
+                            return ()
+        signalThrow ex = do _ <- tryPutMVar signal $ throwIO
+                                 (ex :: SomeException)
+                            return ()
 
     mask_ $ withWorker mgr h $ \enqueue -> do
         enqueue $ do
@@ -153,6 +168,21 @@ withOverlapped mgr h offset startCB completionCB = do
 
         join (takeMVar signal `onException` cancel)
 
+-- Use traceIO because it does not involve the IO manager.  We don't want our
+-- error messages to interfere with the IO manager's operation, or worse,
+-- produce an infinite loop.
+--
+-- TODO: Define traceIO in a module that doesn't import Prelude,
+-- to avoid duplication.
+traceIO :: String -> IO ()
+traceIO msg =
+    withCString "%s\n" $ \cfmt ->
+    withCString msg  $ \cmsg ->
+    debugBelch2 cfmt cmsg
+
+foreign import ccall unsafe "HsBase.h debugBelch2"
+    debugBelch2 :: CString -> CString -> IO ()
+
 ------------------------------------------------------------------------
 -- Timeouts
 
@@ -175,9 +205,9 @@ newtype TimeoutKey = TK Unique
 --
 -- The 'TimeoutCallback' will not be called more than once.
 registerTimeout :: Manager -> Seconds -> TimeoutCallback -> IO TimeoutKey
-registerTimeout mgr relTime cb = do
-    key <- newUnique
-    now <- getTime (mgrClock mgr)
+registerTimeout mgr@Manager{..} relTime cb = do
+    key <- newUnique mgrUniqueSource
+    now <- getTime mgrClock
     let !expTime = now + relTime
     postMgr mgr $ modifyTQ $ Q.insert key expTime cb
     return $ TK key
@@ -209,11 +239,11 @@ instance Functor Mgr where
     fmap = liftM
 
 instance Applicative Mgr where
-    pure  = return
-    (<*>) = ap
+    pure a = Mgr $ \s -> return (a, s)
+    (<*>)  = ap
 
 instance Monad Mgr where
-    return a = Mgr $ \s -> return (a, s)
+    return = pure
     m >>= k = Mgr $ \s -> do
         (a, s') <- runMgr m s
         runMgr (k a) s'
@@ -236,18 +266,29 @@ stateTQ f = Mgr $ \s -> do
     let (a, !s') = f s
     return (a, s')
 
+mapM_        :: Monad m => (a -> m b) -> [a] -> m ()
+{-# INLINE mapM_ #-}
+mapM_ f xs    =  foldr (>>) (return ()) (map f xs)
+
 ------------------------------------------------------------------------
 -- I/O manager loop
 
--- | Call all expired timeouts, and return how much time until the next expiration.
+-- | Call all expired timeouts, and return how much time until the next
+-- | expiration.
 runExpiredTimeouts :: Manager -> Mgr (Maybe Seconds)
 runExpiredTimeouts Manager{..} = do
-    empty <- getsTQ Q.null
-    if empty then
+    -- Avoid calling getTime when there are no pending expirations.
+    isNull <- getsTQ Q.null
+    if isNull then
         return Nothing
     else do
         now <- liftIO $ getTime mgrClock
-        stateTQ (Q.atMost now) >>= mapM_ (liftIO . Q.value)
+
+        -- Remove timeouts with expiration <= now, and execute their callbacks.
+        expired <- stateTQ $ Q.atMost now
+        mapM_ (liftIO . Q.value) expired
+
+        -- See how soon the next timeout expires.
         next <- getsTQ $ fmap Q.prio . Q.findMin
         case next of
             Nothing ->
@@ -332,16 +373,16 @@ withWorker mgr@Manager{..} h cb =
         case IM.lookup key m of
             Nothing ->
                 let !pool = Pool False mgrWorkers 1
-                    !m'   = IM.insert key pool m
+                    !m'   = snd $ IM.insert key pool m
                  in (m', (postIO mgr, releaseCP))
             Just Pool{..}
               | pCompletionPort ->
                 let !pool = Pool False pWorkers (pRefCount + 1)
-                    !m'   = IM.insert key pool m
+                    !m'   = snd $ IM.insert key pool m
                  in (m', (postIO mgr, releaseCP))
               | WL w ws <- pWorkers ->
                 let !pool = Pool pCompletionPort ws (pRefCount + 1)
-                    !m'   = IM.insert key pool m
+                    !m'   = snd $ IM.insert key pool m
                  in (m', (Worker.enqueue w, releaseWorker w))
 
     releaseCP :: ReleaseF
@@ -358,9 +399,9 @@ withWorker mgr@Manager{..} h cb =
             Nothing -> (m, ())  -- should never happen
             Just pool
               | pRefCount pool <= 1 ->
-                let !m' = IM.delete key m
+                let !m' = snd $ IM.delete key m
                  in (m', ())
               | otherwise ->
                 let !pool' = f pool
-                    !m'    = IM.insert key pool' m
+                    !m'    = snd $ IM.insert key pool' m
                  in (m', ())

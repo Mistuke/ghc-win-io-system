@@ -1,6 +1,6 @@
 module Main where
 
-import IOCP.Clock
+import GHC.Event.Windows.Clock
 
 import Control.Applicative
 import Control.Exception

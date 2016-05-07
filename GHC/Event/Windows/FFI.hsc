@@ -1,7 +1,8 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE DoAndIfThenElse #-}
 {-# LANGUAGE ForeignFunctionInterface #-}
-module IOCP.FFI (
+{-# LANGUAGE NoImplicitPrelude #-}
+module GHC.Event.Windows.FFI (
     -- * IOCP
     IOCP(..),
     newIOCP,
@@ -27,7 +28,7 @@ module IOCP.FFI (
     queryPerformanceCounter,
     queryPerformanceFrequency,
 
-    -- * Miscellaneous
+    -- ** miscellaneous
     throwWinErr,
 ) where
 
@@ -43,10 +44,13 @@ module IOCP.FFI (
 ## endif
 ##endif
 
+import Control.Exception hiding (handle)
+import Data.Maybe
 import Data.Word
 import Foreign
-import System.Win32.Types
-
+import GHC.Base
+import GHC.Show
+import GHC.Windows
 import qualified System.Win32.Types as Win32
 
 ------------------------------------------------------------------------
@@ -66,12 +70,12 @@ foreign import WINDOWS_CCONV unsafe "windows.h CreateIoCompletionPort"
 
 newIOCP :: IO (IOCP a)
 newIOCP =
-    Win32.failIf (== IOCP nullPtr) "newIOCP" $
+    failIf (== IOCP nullPtr) "newIOCP" $
         c_CreateIoCompletionPort iNVALID_HANDLE_VALUE (IOCP nullPtr) 0 1
 
 associateHandleWithIOCP :: IOCP a -> HANDLE -> IO ()
 associateHandleWithIOCP iocp handle =
-    Win32.failIf_ (/= iocp) "associateHandleWithIOCP" $
+    failIf_ (/= iocp) "associateHandleWithIOCP" $
         c_CreateIoCompletionPort handle iocp 0 0
 
 foreign import ccall safe
@@ -97,14 +101,14 @@ getNextCompletion iocp timeout =
         else if err == #{const WAIT_TIMEOUT} then
             return Nothing
         else
-            Win32.failWith "GetQueuedCompletionStatus" err
+            failWith "GetQueuedCompletionStatus" err
 
 foreign import WINDOWS_CCONV unsafe "windows.h PostQueuedCompletionStatus"
     c_PostQueuedCompletionStatus :: IOCP a -> DWORD -> ULONG_PTR -> Overlapped -> IO BOOL
 
 postCompletion :: IOCP a -> DWORD -> Overlapped -> IO ()
 postCompletion iocp numBytes ol =
-    Win32.failIfFalse_ "PostQueuedCompletionStatus" $
+    failIfFalse_ "PostQueuedCompletionStatus" $
     c_PostQueuedCompletionStatus iocp numBytes 0 ol
 
 ------------------------------------------------------------------------
@@ -126,10 +130,10 @@ foreign import ccall unsafe
 newOverlapped :: Word64 -- ^ Offset/OffsetHigh
               -> a      -- ^ Application context (stored alongside the @OVERLAPPED@ structure)
               -> IO Overlapped
-newOverlapped offset ctx = do
-    ptr <- newStablePtr ctx
-    Win32.failIf (== Overlapped nullPtr) "newOverlapped" $
-        c_iocp_new_overlapped offset ptr
+newOverlapped offset ctx =
+    bracketOnError (newStablePtr ctx) freeStablePtr $ \ptr ->
+        failIf (== Overlapped nullPtr) "newOverlapped" $
+            c_iocp_new_overlapped offset ptr
 
 foreign import ccall unsafe
     c_iocp_finish_overlapped :: Overlapped -> IO (StablePtr a)
@@ -150,7 +154,7 @@ foreign import WINDOWS_CCONV safe "windows.h CancelIo"
 -- | Cancel all pending overlapped I/O for the given file that was initiated by
 -- the current OS thread.
 cancelIo :: HANDLE -> IO ()
-cancelIo = Win32.failIfFalse_ "CancelIo" . c_CancelIo
+cancelIo = failIfFalse_ "CancelIo" . c_CancelIo
 
 ------------------------------------------------------------------------
 -- Monotonic time
@@ -235,7 +239,7 @@ callQP qpfunc =
 queryPerformanceCounter :: IO Int64
 queryPerformanceCounter =
     callQP c_QueryPerformanceCounter
-    >>= maybe (Win32.errorWin "QueryPerformanceCounter") return
+    >>= maybe (throwGetLastError "QueryPerformanceCounter") return
 
 -- | Call the @QueryPerformanceFrequency@ function.  Return 'Nothing' if the
 -- hardware does not provide a high-resolution performance counter.

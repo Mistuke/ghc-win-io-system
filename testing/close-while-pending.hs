@@ -13,7 +13,7 @@ import Network.Socket       (Family(..), SocketType(..), PortNumber
                             , SockAddr(..)
                             , defaultProtocol, inet_addr)
 import System.IO
-import Winsock
+import Network.Winsock
 import qualified Network as N
 
 portNum :: PortNumber

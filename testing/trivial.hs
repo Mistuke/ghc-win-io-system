@@ -3,7 +3,7 @@
 
 {-# OPTIONS -fno-warn-missing-signatures #-}
 import Network.Socket hiding (socket, connect)
-import qualified Winsock
+import qualified Network.Winsock as Winsock
 
 import Control.Concurrent   (threadDelay)
 import Control.Exception    (finally)

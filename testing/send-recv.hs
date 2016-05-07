@@ -14,7 +14,7 @@ import Network.Socket       (Family(..), SocketType(..), PortNumber
                             , SockAddr(..), defaultProtocol, inet_addr)
 import System.IO
 import System.Timeout       (timeout)
-import Winsock
+import Network.Winsock
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as B8
 import qualified Network as N

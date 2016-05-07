@@ -1,4 +1,4 @@
-import IOCP.FFI
+import GHC.Event.Windows.FFI
 
 import Control.Applicative
 import Control.Exception

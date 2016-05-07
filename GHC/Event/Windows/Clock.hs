@@ -1,4 +1,6 @@
-module IOCP.Clock (
+{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE NoImplicitPrelude #-}
+module GHC.Event.Windows.Clock (
     Clock,
     Seconds,
     getTime,
@@ -10,12 +12,15 @@ module IOCP.Clock (
     getTickCount,
 ) where
 
-import qualified IOCP.FFI as FFI
+import qualified GHC.Event.Windows.FFI as FFI
 
-import Control.Monad    (liftM)
 import Data.IORef
-import Data.Int     (Int32)
-import Data.Word    (Word32, Word64)
+import Data.Int
+import Data.Maybe
+import Data.Word
+import GHC.Base
+import GHC.Num
+import GHC.Real
 
 -- | Monotonic clock
 newtype Clock = Clock (IO Seconds)
@@ -46,14 +51,16 @@ queryPerformanceCounter =
     FFI.queryPerformanceFrequency `mapJust` \freq ->
     Clock $ do
         count <- FFI.queryPerformanceCounter
-        return $! fromIntegral count / fromIntegral freq
+        let !secs = fromIntegral count / fromIntegral freq
+        return secs
 
 getTickCount64 :: IO (Maybe Clock)
 getTickCount64 =
     FFI.loadGetTickCount64 `mapJust` \gtc64 ->
     Clock $ do
-        msec <- gtc64
-        return $! fromIntegral msec / 1000
+        msecs <- gtc64
+        let !secs = fromIntegral msecs / 1000
+        return secs
 
 getTickCount :: IO Clock
 getTickCount = do
@@ -62,8 +69,9 @@ getTickCount = do
     -- Only works if getTickCount is called at least once every 24.8 days.
     count64 <- FFI.getTickCount >>= newIORef . fromIntegral :: IO (IORef Word64)
     return $ Clock $ do
-        msec <- FFI.getTickCount >>= atomicModifyIORef count64 . step
-        return $! fromIntegral msec / 1000
+        msecs <- FFI.getTickCount >>= atomicModifyIORef count64 . step
+        let !secs = fromIntegral msecs / 1000
+        return secs
   where
     step :: Word32 -> Word64 -> (Word64, Word64)
     step now before = (now64, now64)

@@ -2,12 +2,13 @@ name:               iocp
 version:            0.1
 synopsis:           Nursery for a GHC IO manager using Windows completion ports
 -- description:
-homepage:           https://github.com/joeyadams/haskell-iocp
+homepage:           https://github.com/23Skidoo/haskell-iocp
 license:            BSD3
 license-file:       LICENSE
-author:             Joey Adams
-maintainer:         joeyadams3.14159@gmail.com
-copyright:          Copyright (c) Joseph Adams 2012
+author:             Joey Adams, Mikhail Glushenkov
+maintainer:         mikhail.glushenkov@gmail.com
+copyright:          Copyright (c) Joseph Adams 2012,
+                    Copyright (c) Mikhail Glushenkov 2016
 category:           System
 build-type:         Simple
 cabal-version:      >=1.8
@@ -16,16 +17,19 @@ extra-source-files:
 
 source-repository head
     type:       git
-    location:   git://github.com/joeyadams/haskell-iocp.git
+    location:   git://github.com/23Skidoo/haskell-iocp.git
 
 library
     exposed-modules:
-        IOCP.Clock
-        IOCP.FFI
-        IOCP.Manager
-        IOCP.PSQ
-        IOCP.Worker
-        Winsock
+        GHC.Event.IntMap
+        GHC.Event.PSQ
+        GHC.Event.Unique
+        GHC.Event.Windows
+        GHC.Event.Windows.Clock
+        GHC.Event.Windows.FFI
+        GHC.Event.Windows.Thread
+        GHC.Event.Windows.Worker
+        Network.Winsock
 
     c-sources:
         cbits/dynamic.c

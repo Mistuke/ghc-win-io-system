@@ -49,7 +49,7 @@
 -- Queues/, ICFP 2001, pp. 110-121
 --
 -- <http://citeseer.ist.psu.edu/hinze01simple.html>
-module IOCP.PSQ
+module GHC.Event.PSQ
     (
     -- * Binding Type
     Elem(..)
@@ -91,14 +91,14 @@ module IOCP.PSQ
 import GHC.Base hiding (empty)
 import GHC.Num (Num(..))
 import GHC.Show (Show(showsPrec))
-import Data.Unique (Unique)
+import GHC.Event.Unique (Unique)
 
 -- | @E k p@ binds the key @k@ with the priority @p@.
 data Elem a = E
-    { key   :: !Key
-    , prio  :: !Prio
+    { key   :: {-# UNPACK #-} !Key
+    , prio  :: {-# UNPACK #-} !Prio
     , value :: a
-    } deriving (Eq)
+    } deriving (Eq, Show)
 
 ------------------------------------------------------------------------
 -- | A mapping from keys @k@ to priorites @p@.
@@ -107,10 +107,10 @@ type Prio = Double
 type Key = Unique
 
 data PSQ a = Void
-           | Winner !(Elem a)
+           | Winner {-# UNPACK #-} !(Elem a)
                     !(LTree a)
-                    !Key  -- max key
-           deriving (Eq)
+                    {-# UNPACK #-} !Key  -- max key
+           deriving (Eq, Show)
 
 -- | /O(1)/ The number of elements in a queue.
 size :: PSQ a -> Int
@@ -287,17 +287,17 @@ atMosts !pt q = case q of
 type Size = Int
 
 data LTree a = Start
-             | LLoser !Size
-                      !(Elem a)
+             | LLoser {-# UNPACK #-} !Size
+                      {-# UNPACK #-} !(Elem a)
                       !(LTree a)
-                      !Key  -- split key
+                      {-# UNPACK #-} !Key  -- split key
                       !(LTree a)
-             | RLoser !Size
-                      !(Elem a)
+             | RLoser {-# UNPACK #-} !Size
+                      {-# UNPACK #-} !(Elem a)
                       !(LTree a)
-                      !Key  -- split key
+                      {-# UNPACK #-} !Key  -- split key
                       !(LTree a)
-             deriving (Eq)
+             deriving (Eq, Show)
 
 size' :: LTree a -> Size
 size' Start              = 0
@@ -458,7 +458,7 @@ tourView (Winner e (LLoser _ e' tl m tr) m') =
 -- Utility functions
 
 moduleError :: String -> String -> a
-moduleError fun msg = error ("GHC.Event.PSQ." ++ fun ++ ':' : ' ' : msg)
+moduleError fun msg = {- errorWithoutStackTrace -} error ("GHC.Event.PSQ." ++ fun ++ ':' : ' ' : msg)
 {-# NOINLINE moduleError #-}
 
 ------------------------------------------------------------------------

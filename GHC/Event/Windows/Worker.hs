@@ -1,6 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE RecordWildCards #-}
-module IOCP.Worker (
+module GHC.Event.Windows.Worker (
     Worker,
     new,
     enqueue,
@@ -9,11 +10,12 @@ module IOCP.Worker (
     forkOSUnmasked,
 ) where
 
-import Control.Concurrent
-import Control.Exception    (mask_)
-import Control.Monad        (forever, void)
 import Data.IORef
-import GHC.IO               (unsafeUnmask)
+import GHC.Base
+import GHC.Conc.Sync
+import GHC.IO
+import GHC.MVar
+import Control.Concurrent
 
 data Worker = Worker
     { workerJobs :: !(IORef JobList)
@@ -22,6 +24,11 @@ data Worker = Worker
 
 instance Eq Worker where
     Worker a _ == Worker b _ = a == b
+
+-- | @'forever' act@ repeats the action infinitely.
+forever     :: (Monad m) => m a -> m b
+{-# INLINE forever #-}
+forever a   = let a' = a >> a' in a'
 
 -- | Fork an OS thread, and return a handle for sending jobs to it.
 new :: IO Worker
@@ -45,7 +52,8 @@ enqueue :: Worker -> IO () -> IO ()
 enqueue Worker{..} io =
     mask_ $ do
         !() <- atomicModifyIORef workerJobs $ \jobs -> (snocJobList jobs io, ())
-        void $ tryPutMVar workerWake ()
+        _ <- tryPutMVar workerWake ()
+        return ()
 
 ------------------------------------------------------------------------
 -- Helpers
