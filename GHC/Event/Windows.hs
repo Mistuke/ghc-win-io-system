@@ -35,7 +35,6 @@ import qualified GHC.Event.PSQ            as Q
 
 import Control.Exception as E
 import Control.Concurrent
-import Data.Either
 import Data.IORef
 import Data.Maybe
 import Data.Tuple
@@ -144,23 +143,19 @@ withOverlapped mgr h offset startCB completionCB = do
                             return ()
 
     mask_ $ withWorker mgr h $ \enqueue -> do
-        enqueue $ do
-            let completionCB' e b = liftIO $
-                    (completionCB e b >>= signalReturn) `E.catch` signalThrow
+        let completionCB' e b = liftIO $
+                (completionCB e b >>= signalReturn) `E.catch` signalThrow
+        ol <- newOverlapped offset completionCB'
 
-            e <- try $ newOverlapped offset completionCB'
-            case e of
-                Left ex -> signalThrow ex
-                Right ol ->
-                    startCB ol `E.catch` \ex -> do
-                        FFI.discardOverlapped ol
-                        signalThrow ex
+        enqueue $ startCB ol `E.catch` \ex -> do FFI.discardOverlapped ol
+                                                 signalThrow ex
 
         let cancel = uninterruptibleMask_ $ do
                 cancelDone <- newEmptyMVar
                 enqueue $ do
-                    FFI.cancelIo h `E.catch` \ex -> do
-                        traceIO $ "CancelIo failed: " ++ show (ex :: SomeException)
+                    FFI.cancelIoEx h ol `E.catch` \ex -> do
+                        traceIO $ "CancelIoEx failed: "
+                                    ++ show (ex :: SomeException)
                         signalThrow ex
                     putMVar cancelDone ()
                 _ <- takeMVar signal

@@ -16,7 +16,7 @@ module GHC.Event.Windows.FFI (
     discardOverlapped,
 
     -- * Cancel pending I/O
-    cancelIo,
+    cancelIoEx,
 
     -- * Monotonic time
 
@@ -128,7 +128,8 @@ foreign import ccall unsafe
 -- an @LPOVERLAPPED@, provided the @HANDLE@ was associated with an 'IOCP' with
 -- the same type @a@.
 newOverlapped :: Word64 -- ^ Offset/OffsetHigh
-              -> a      -- ^ Application context (stored alongside the @OVERLAPPED@ structure)
+              -> a      -- ^ Application context (stored alongside the
+                        -- @OVERLAPPED@ structure)
               -> IO Overlapped
 newOverlapped offset ctx =
     bracketOnError (newStablePtr ctx) freeStablePtr $ \ptr ->
@@ -148,13 +149,13 @@ discardOverlapped o = c_iocp_finish_overlapped o >>= freeStablePtr
 
 -- | CancelIo shouldn't block, but cancellation happens infrequently,
 -- so we might as well be on the safe side.
-foreign import WINDOWS_CCONV safe "windows.h CancelIo"
-    c_CancelIo :: HANDLE -> IO BOOL
+foreign import WINDOWS_CCONV safe "windows.h CancelIoEx"
+    c_CancelIoEx :: HANDLE -> Overlapped -> IO BOOL
 
 -- | Cancel all pending overlapped I/O for the given file that was initiated by
 -- the current OS thread.
-cancelIo :: HANDLE -> IO ()
-cancelIo = failIfFalse_ "CancelIo" . c_CancelIo
+cancelIoEx :: HANDLE -> Overlapped -> IO ()
+cancelIoEx h o = failIfFalse_ "CancelIoEx" . c_CancelIoEx h $ o
 
 ------------------------------------------------------------------------
 -- Monotonic time
