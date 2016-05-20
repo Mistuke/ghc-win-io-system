@@ -5,6 +5,9 @@ module Network.Winsock (
     Socket(..),
     SOCKET,
     socket,
+    bind,
+    listen,
+    accept,
     connect,
     shutdown,
     close,
@@ -13,6 +16,7 @@ module Network.Winsock (
 
     recv,
     send,
+    sendAll
 ) where
 
 #include <winsock2.h>
@@ -32,8 +36,9 @@ import GHC.Event.Windows               (Overlapped(..))
 import qualified GHC.Event.Windows.FFI as FFI
 import qualified GHC.Event.Windows     as Mgr
 
-import Control.Monad            (void)
+import Control.Monad            (void, when)
 import Data.ByteString          (ByteString)
+import qualified Data.ByteString as B
 import Data.ByteString.Internal (createAndTrim)
 import Data.ByteString.Unsafe   (unsafeUseAsCStringLen)
 import Data.IORef
@@ -69,6 +74,31 @@ withOverlapped :: SOCKET -> Word64
                -> IO a
 withOverlapped h offset startCB completionCB = do
     Mgr.withOverlapped (castSOCKETToHANDLE h) offset startCB completionCB
+
+listen :: Socket -> IO ()
+listen (Socket sock) = do
+  Win32.failIf_ (/= 0) "listen" $ c_listen sock (#const SOMAXCONN)
+
+bind :: Socket -> NS.SockAddr -> IO ()
+bind (Socket sock) addr = do
+  withSockAddr addr $ \addr_ptr addr_len ->
+      Win32.failIf_ (/= 0) "bind" $ c_bind sock addr_ptr (fromIntegral addr_len)
+
+accept :: Socket -> IO Socket
+accept (Socket listenSock) = do
+  winsock <- getWinsock
+  acceptSock <- socket NS.AF_INET NS.Stream NS.defaultProtocol
+  withOverlapped listenSock 0 (startCB winsock acceptSock)
+                     (completionCB acceptSock)
+  return acceptSock
+    where
+      startCB winsock (Socket acceptSock) overlapped =
+          Win32.failIfFalse_ "accept" $
+          c_winsock_accept winsock listenSock acceptSock overlapped
+
+      completionCB (Socket acceptSock) err _numBytes
+          | err == 0  = c_winsock_accept_on_completion listenSock acceptSock
+          | otherwise = FFI.throwWinErr "accept" err
 
 connect :: Socket -> NS.SockAddr -> IO ()
 connect (Socket sock) addr = do
@@ -128,6 +158,11 @@ recv sock len =
     createAndTrim len $ \buf ->
     recvBuf sock buf len
 
+sendAll :: Socket -> ByteString  -> IO ()
+sendAll sock bs = do
+    sent <- send sock bs
+    when (sent < B.length bs) $ sendAll sock (B.drop sent bs)
+
 send :: Socket -> ByteString -> IO Int
 send sock bs =
     unsafeUseAsCStringLen bs $ \(buf, len) ->
@@ -152,6 +187,18 @@ castSOCKETToHANDLE = wordPtrToPtr . fromIntegral
 
 foreign import ccall unsafe
     c_winsock_init :: IO Winsock
+
+foreign import WINDOWS_CCONV unsafe "winsock2.h bind"
+  c_bind :: SOCKET -> Ptr NS.SockAddr -> CInt -> IO CInt
+
+foreign import WINDOWS_CCONV unsafe "winsock2.h listen"
+  c_listen :: SOCKET -> CInt -> IO CInt
+
+foreign import ccall unsafe
+    c_winsock_accept :: Winsock -> SOCKET -> SOCKET -> Overlapped -> IO BOOL
+
+foreign import ccall unsafe
+    c_winsock_accept_on_completion :: SOCKET -> SOCKET -> IO ()
 
 foreign import ccall unsafe
     c_winsock_connect :: Winsock -> SOCKET -> Ptr NS.SockAddr -> CInt -> Overlapped -> IO BOOL

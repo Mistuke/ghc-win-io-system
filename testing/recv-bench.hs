@@ -11,6 +11,7 @@ import Network.Socket       (Family(..), SocketType(..), PortNumber
                             , SockAddr(..), defaultProtocol, inet_addr)
 import System.IO
 import Network.Winsock
+import GHC.Event.Windows (getSystemManager)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as B8
 import qualified Network as N
@@ -44,9 +45,10 @@ main = do
     nsbSock <- NS.socket AF_INET Stream defaultProtocol
     NS.connect nsbSock $ SockAddrInet portNum addr
 
+    void $ getSystemManager
     threadDelay 1000000
 
-    defaultMain
+    runInUnboundThread $ defaultMain
         [ bench "Winsock.recv" $
             whnfIO $ recv sock 1
         , bench "Network.Socket.ByteString.recv" $

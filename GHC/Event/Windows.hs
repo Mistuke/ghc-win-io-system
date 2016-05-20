@@ -1,9 +1,9 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DoAndIfThenElse #-}
 {-# LANGUAGE ForeignFunctionInterface #-}
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 module GHC.Event.Windows (
     -- * Manager
     Manager,

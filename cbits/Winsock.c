@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <ws2tcpip.h>
 #include <mswsock.h>
+#include <stdio.h>
 
 // WSAID macros and corresponding function signatures copied from Wine's mswsock.h
 
@@ -103,6 +104,27 @@ fail1:
     HeapFree(GetProcessHeap(), 0, winsock);
     return NULL;
 }
+
+#define OUTBUF_LEN ((sizeof(SOCKADDR_IN) + 16)*3)
+static char outBuf[OUTBUF_LEN];
+
+BOOL c_winsock_accept(Winsock *winsock, SOCKET listenSock,
+                      SOCKET acceptSock, OVERLAPPED *ol)
+{
+    DWORD dwBytes = 0;
+    BOOL ok = winsock->AcceptEx(listenSock, acceptSock, &outBuf, 0,
+                                sizeof(SOCKADDR_IN) + 16,
+                                sizeof(SOCKADDR_IN) + 16, &dwBytes, ol);
+    return (ok || WSAGetLastError() == ERROR_IO_PENDING);
+}
+
+void c_winsock_accept_on_completion(SOCKET listenSock, SOCKET acceptSock)
+{
+
+    setsockopt(acceptSock, SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT,
+               (char *)&listenSock, sizeof(listenSock));
+}
+
 
 BOOL c_winsock_connect(Winsock *winsock, SOCKET sock, SOCKADDR *addr, int addrLen, OVERLAPPED *ol)
 {
