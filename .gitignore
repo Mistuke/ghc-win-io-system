@@ -3,3 +3,4 @@
 *.sw[nop]
 TAGS
 cabal.sandbox.config
+*.prof
