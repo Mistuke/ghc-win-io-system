@@ -9,6 +9,7 @@ module GHC.Event.Windows (
     Manager,
     new,
     getSystemManager,
+    postIO,
 
     -- * Overlapped I/O
     associateHandle,
@@ -28,9 +29,7 @@ module GHC.Event.Windows (
 
 import GHC.Event.Windows.Clock   (Clock, Seconds, getClock, getTime)
 import GHC.Event.Windows.FFI     (Overlapped(..))
-import GHC.Event.Windows.Worker  (Worker, forkOSUnmasked)
 import qualified GHC.Event.Windows.FFI    as FFI
-import qualified GHC.Event.Windows.Worker as Worker
 import qualified GHC.Event.PSQ            as Q
 
 import Control.Exception as E
@@ -39,19 +38,12 @@ import Data.IORef
 import Data.Maybe
 import Data.Tuple
 import Data.Word
-import Foreign.C.String
-import Foreign.Ptr
 import GHC.Base
--- import GHC.Conc.Sync
 import GHC.Event.Unique
--- import GHC.MVar
 import GHC.Num
 import GHC.Real
-import GHC.Show
 import GHC.Windows
-import System.IO.Unsafe     (unsafeInterleaveIO, unsafePerformIO)
-
-import qualified GHC.Event.IntMap as IM
+import System.IO.Unsafe     (unsafePerformIO)
 
 ------------------------------------------------------------------------
 -- Manager
@@ -60,8 +52,6 @@ data Manager = Manager
     { mgrIOCP         :: !(FFI.IOCP ManagerCallback)
     , mgrClock        :: !Clock
     , mgrUniqueSource :: !UniqueSource
-    , mgrWorkers      :: WorkerList
-    , mgrWorkerMap    :: !(IORef WorkerMap)
     }
 
 type ManagerCallback = ErrCode -> DWORD -> Mgr ()
@@ -71,10 +61,8 @@ new = do
     mgrIOCP         <- FFI.newIOCP
     mgrClock        <- getClock
     mgrUniqueSource <- newSource
-    mgrWorkers      <- newWorkerList
-    mgrWorkerMap    <- newIORef IM.empty
     let mgr = Manager{..}
-    _tid <- forkOSUnmasked $ loop mgr
+    _tid <- forkIO $ loop mgr
     return mgr
 
 getSystemManager :: IO (Maybe Manager)
@@ -127,56 +115,29 @@ associateHandle Manager{..} h =
 -- 'withOverlapped' waits for a completion to arrive before returning or
 -- throwing an exception.  This means you can use functions like
 -- 'Foreign.Marshal.Alloc.alloca' to allocate buffers for the operation.
-withOverlapped :: Manager
-               -> HANDLE
+withOverlapped :: HANDLE
                -> Word64 -- ^ Value to use for the @OVERLAPPED@
                          --   structure's Offset/OffsetHigh members.
                -> StartCallback
                -> CompletionCallback a
                -> IO a
-withOverlapped mgr h offset startCB completionCB = do
+withOverlapped h offset startCB completionCB = do
     signal <- newEmptyMVar
     let signalReturn a = do _ <- tryPutMVar signal $ return a
                             return ()
         signalThrow ex = do _ <- tryPutMVar signal $ throwIO
                                  (ex :: SomeException)
                             return ()
-
-    mask_ $ withWorker mgr h $ \enqueue -> do
+    mask_ $ do
         let completionCB' e b = liftIO $
                 (completionCB e b >>= signalReturn) `E.catch` signalThrow
         ol <- newOverlapped offset completionCB'
 
-        enqueue $ startCB ol `E.catch` \ex -> do FFI.discardOverlapped ol
-                                                 signalThrow ex
+        startCB ol `E.catch` \ex -> do FFI.discardOverlapped ol
+                                       signalThrow ex
 
-        let cancel = uninterruptibleMask_ $ do
-                cancelDone <- newEmptyMVar
-                enqueue $ do
-                    FFI.cancelIoEx h ol `E.catch` \ex -> do
-                        traceIO $ "CancelIoEx failed: "
-                                    ++ show (ex :: SomeException)
-                        signalThrow ex
-                    putMVar cancelDone ()
-                _ <- takeMVar signal
-                takeMVar cancelDone
-
+        let cancel = uninterruptibleMask_ $ FFI.cancelIoEx h ol
         join (takeMVar signal `onException` cancel)
-
--- Use traceIO because it does not involve the IO manager.  We don't want our
--- error messages to interfere with the IO manager's operation, or worse,
--- produce an infinite loop.
---
--- TODO: Define traceIO in a module that doesn't import Prelude,
--- to avoid duplication.
-traceIO :: String -> IO ()
-traceIO msg =
-    withCString "%s\n" $ \cfmt ->
-    withCString msg  $ \cmsg ->
-    debugBelch2 cfmt cmsg
-
-foreign import ccall unsafe "HsBase.h debugBelch2"
-    debugBelch2 :: CString -> CString -> IO ()
 
 ------------------------------------------------------------------------
 -- Timeouts
@@ -312,91 +273,3 @@ step mgr@Manager{..} = do
 loop :: Manager -> IO loop
 loop mgr = go Q.empty
   where go s = runMgr (step mgr) s >>= go . snd
-
-------------------------------------------------------------------------
--- Worker allocation
-
-type WorkerMap = IM.IntMap Pool
-
--- | Used to allocate worker threads for I/O requests.  The rule is: a handle
--- may not use the same worker for two simultaneous operations (however,
--- multiple handles may share the same worker).  This is because CancelIo
--- cancels all pending I/O for a given handle in the current thread.
--- CancelIoEx would let us specify an individual operation to cancel,
--- but it was introduced in Windows Vista.
---
--- Whenever we can, we queue jobs to the completion handler using
--- 'postIO'.  This is about 30% faster than using a separate
--- worker thread, as it avoids a context switch.
-data Pool = Pool
-    { pCompletionPort :: !Bool
-    , pWorkers        :: WorkerList
-    , pRefCount       :: !Int
-        -- ^ Number of in-progress 'withWorker' calls.  When this drops to
-        --   zero, we can remove this entry from the 'WorkerMap'.
-    }
-
-data WorkerList = WL !Worker WorkerList
-
--- | Nifty trick to allow each 'Pool' to allocate workers per concurrent
--- operation, while allowing 'Pool's to share workers.
-newWorkerList :: IO WorkerList
-newWorkerList = unsafeInterleaveIO $ do
-    w  <- Worker.new
-    ws <- newWorkerList
-    return (WL w ws)
-{-# NOINLINE newWorkerList #-}
-
-type Enqueue = IO () -> IO ()
-
-type ReleaseF = WorkerMap -> (WorkerMap, ())
-
-withWorker :: Manager -> HANDLE -> (Enqueue -> IO a) -> IO a
-withWorker mgr@Manager{..} h cb =
-    mask $ \restore -> do
-        (enqueue, releaseF) <- atomicModifyIORef mgrWorkerMap grabF
-        let release = atomicModifyIORef mgrWorkerMap releaseF
-                  >>= evaluate
-        a <- restore (cb enqueue) `onException` release
-        release
-        return a
-  where
-    key = (fromIntegral . ptrToIntPtr) h :: Int
-
-    grabF :: WorkerMap -> (WorkerMap, (Enqueue, ReleaseF))
-    grabF m =
-        case IM.lookup key m of
-            Nothing ->
-                let !pool = Pool False mgrWorkers 1
-                    !m'   = snd $ IM.insert key pool m
-                 in (m', (postIO mgr, releaseCP))
-            Just Pool{..}
-              | pCompletionPort ->
-                let !pool = Pool False pWorkers (pRefCount + 1)
-                    !m'   = snd $ IM.insert key pool m
-                 in (m', (postIO mgr, releaseCP))
-              | WL w ws <- pWorkers ->
-                let !pool = Pool pCompletionPort ws (pRefCount + 1)
-                    !m'   = snd $ IM.insert key pool m
-                 in (m', (Worker.enqueue w, releaseWorker w))
-
-    releaseCP :: ReleaseF
-    releaseCP = releaseWith $ \Pool{..} ->
-        Pool True pWorkers (pRefCount - 1)
-
-    releaseWorker :: Worker -> ReleaseF
-    releaseWorker w = releaseWith $ \Pool{..} ->
-        Pool pCompletionPort (WL w pWorkers) (pRefCount - 1)
-
-    releaseWith :: (Pool -> Pool) -> ReleaseF
-    releaseWith f m =
-        case IM.lookup key m of
-            Nothing -> (m, ())  -- should never happen
-            Just pool
-              | pRefCount pool <= 1 ->
-                let !m' = snd $ IM.delete key m
-                 in (m', ())
-              | otherwise ->
-                let !pool' = f pool
-                    !m'    = snd $ IM.insert key pool' m
-                 in (m', ())

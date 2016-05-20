@@ -68,8 +68,7 @@ withOverlapped :: SOCKET -> Word64
                -> Mgr.CompletionCallback a
                -> IO a
 withOverlapped h offset startCB completionCB = do
-    mgr <- getManager
-    Mgr.withOverlapped mgr (castSOCKETToHANDLE h) offset startCB completionCB
+    Mgr.withOverlapped (castSOCKETToHANDLE h) offset startCB completionCB
 
 connect :: Socket -> NS.SockAddr -> IO ()
 connect (Socket sock) addr = do

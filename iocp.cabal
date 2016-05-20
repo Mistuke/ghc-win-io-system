@@ -21,14 +21,12 @@ source-repository head
 
 library
     exposed-modules:
-        GHC.Event.IntMap
         GHC.Event.PSQ
         GHC.Event.Unique
         GHC.Event.Windows
         GHC.Event.Windows.Clock
         GHC.Event.Windows.FFI
         GHC.Event.Windows.Thread
-        GHC.Event.Windows.Worker
         Network.Winsock
 
     c-sources:
