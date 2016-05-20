@@ -45,62 +45,86 @@ library
                     , Win32
                     , network
 
+executable pong
+    main-is: pong.hs
+    hs-source-dirs: testing
+    build-depends: ansi-terminal, base, bytestring, iocp, network
+    ghc-options: -threaded -rtsopts
+
+executable pong-baseline
+    main-is: pong-baseline.hs
+    hs-source-dirs: testing
+    build-depends: ansi-terminal, base, bytestring, iocp, network
+    ghc-options: -threaded -rtsopts
+
+executable file
+    main-is: file.hs
+    hs-source-dirs: testing
+    build-depends: ansi-terminal, base, bytestring, iocp, network
+    ghc-options: -threaded -rtsopts
+
+executable file-baseline
+    main-is: file-baseline.hs
+    hs-source-dirs: testing
+    build-depends: ansi-terminal, base, bytestring, iocp, network
+    ghc-options: -threaded -rtsopts
+
 executable clock
     main-is: clock.hs
     hs-source-dirs: testing
     build-depends: ansi-terminal, base, iocp
-    ghc-options: -threaded
+    ghc-options: -threaded -rtsopts
 
 executable close-while-pending
     main-is: close-while-pending.hs
     hs-source-dirs: testing
     build-depends: base, bytestring, iocp, network
-    ghc-options: -threaded
+    ghc-options: -threaded -rtsopts
 
 executable close-without-shutdown
     main-is: close-without-shutdown.hs
     hs-source-dirs: testing
     build-depends: base, bytestring, iocp, network
-    ghc-options: -threaded
+    ghc-options: -threaded -rtsopts
 
 executable monotonic-time
     main-is: monotonic-time.hs
     hs-source-dirs: testing
     build-depends: ansi-terminal, base, iocp
-    ghc-options: -threaded
+    ghc-options: -threaded -rtsopts
 
 executable recv-bench
     main-is: recv-bench.hs
     hs-source-dirs: testing
     build-depends: base, bytestring, criterion, iocp, network
-    ghc-options: -threaded
+    ghc-options: -threaded -rtsopts
 
 executable recv
     main-is: recv.hs
     hs-source-dirs: testing
     build-depends: base, iocp, network
-    ghc-options: -threaded
+    ghc-options: -threaded -rtsopts
 
 executable send-buffer-full
     main-is: send-buffer-full.hs
     hs-source-dirs: testing
     build-depends: base, bytestring, iocp, network
-    ghc-options: -threaded
+    ghc-options: -threaded -rtsopts
 
 executable send
     main-is: send.hs
     hs-source-dirs: testing
     build-depends: base, bytestring, iocp, network
-    ghc-options: -threaded
+    ghc-options: -threaded -rtsopts
 
 executable send-recv
     main-is: send-recv.hs
     hs-source-dirs: testing
     build-depends: base, bytestring, iocp, network
-    ghc-options: -threaded
+    ghc-options: -threaded -rtsopts
 
 executable trivial
     main-is: trivial.hs
     hs-source-dirs: testing
     build-depends: base, iocp, network
-    ghc-options: -threaded
+    ghc-options: -threaded -rtsopts
