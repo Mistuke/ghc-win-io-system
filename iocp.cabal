@@ -151,10 +151,6 @@ executable send
     hs-source-dirs: testing
     build-depends: base, bytestring, iocp, network
     ghc-options: -threaded -rtsopts
-    if flag(all-tests)
-       buildable: True
-    else
-       buildable: False
 
 executable send-recv
     main-is: send-recv.hs

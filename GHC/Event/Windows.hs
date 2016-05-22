@@ -7,9 +7,7 @@
 module GHC.Event.Windows (
     -- * Manager
     Manager,
-    new,
     getSystemManager,
-    postIO,
 
     -- * Overlapped I/O
     associateHandle,
@@ -35,8 +33,8 @@ import qualified GHC.Event.PSQ            as Q
 import Control.Exception as E
 import Control.Concurrent
 import Data.IORef
+import Data.Foldable (mapM_)
 import Data.Maybe
-import Data.Tuple
 import Data.Word
 import GHC.Base
 import GHC.Event.Unique
@@ -49,18 +47,18 @@ import System.IO.Unsafe     (unsafePerformIO)
 -- Manager
 
 data Manager = Manager
-    { mgrIOCP         :: !(FFI.IOCP ManagerCallback)
-    , mgrClock        :: !Clock
-    , mgrUniqueSource :: !UniqueSource
+    { mgrIOCP         :: {-# UNPACK #-} !(FFI.IOCP (CompletionCallback ()))
+    , mgrClock        ::                !Clock
+    , mgrUniqueSource :: {-# UNPACK #-} !UniqueSource
+    , mgrTimeouts     :: {-# UNPACK #-} !(IORef TimeoutQueue)
     }
-
-type ManagerCallback = ErrCode -> DWORD -> Mgr ()
 
 new :: IO Manager
 new = do
     mgrIOCP         <- FFI.newIOCP
     mgrClock        <- getClock
     mgrUniqueSource <- newSource
+    mgrTimeouts     <- newIORef Q.empty
     let mgr = Manager{..}
     _tid <- forkIO $ loop mgr
     return mgr
@@ -75,18 +73,8 @@ managerRef = unsafePerformIO $
         else newIORef Nothing
 {-# NOINLINE managerRef #-}
 
-newOverlapped :: Word64 -> ManagerCallback -> IO Overlapped
+newOverlapped :: Word64 -> CompletionCallback a -> IO Overlapped
 newOverlapped = FFI.newOverlapped
-
--- | Queue an action to be performed by the I/O manager thread.
-postIO :: Manager -> IO () -> IO ()
-postIO mgr = postMgr mgr . liftIO
-
--- | Variant of 'postIO' that allows the callback to modify the
--- timeout queue.
-postMgr :: Manager -> Mgr () -> IO ()
-postMgr mgr cb = newOverlapped 0 (\_errCode _numBytes -> cb)
-             >>= FFI.postCompletion (mgrIOCP mgr) 0
 
 ------------------------------------------------------------------------
 -- Overlapped I/O
@@ -99,8 +87,8 @@ type StartCallback = Overlapped -> IO ()
 
 -- | Called when the completion is delivered.
 type CompletionCallback a = ErrCode   -- ^ 0 indicates success
-                         -> DWORD     -- ^ Number of bytes transferred
-                         -> IO a
+                          -> DWORD     -- ^ Number of bytes transferred
+                          -> IO a
 
 -- | Associate a 'HANDLE' with the I/O manager's completion port.  This must be
 -- done before using the handle with 'withOverlapped'.
@@ -129,7 +117,7 @@ withOverlapped h offset startCB completionCB = do
                                  (ex :: SomeException)
                             return ()
     mask_ $ do
-        let completionCB' e b = liftIO $
+        let completionCB' e b =
                 (completionCB e b >>= signalReturn) `E.catch` signalThrow
         ol <- newOverlapped offset completionCB'
 
@@ -142,6 +130,7 @@ withOverlapped h offset startCB completionCB = do
 ------------------------------------------------------------------------
 -- Timeouts
 
+-- | A priority search queue, with timeouts as priorities.
 type TimeoutQueue = Q.PSQ TimeoutCallback
 
 -- |
@@ -152,6 +141,10 @@ type TimeoutQueue = Q.PSQ TimeoutCallback
 -- until the call completes.
 type TimeoutCallback = IO ()
 
+-- | An edit to apply to a 'TimeoutQueue'.
+type TimeoutEdit = TimeoutQueue -> TimeoutQueue
+
+-- | A timeout registration cookie.
 newtype TimeoutKey = TK Unique
     deriving (Eq, Ord)
 
@@ -163,9 +156,12 @@ newtype TimeoutKey = TK Unique
 registerTimeout :: Manager -> Seconds -> TimeoutCallback -> IO TimeoutKey
 registerTimeout mgr@Manager{..} relTime cb = do
     key <- newUnique mgrUniqueSource
-    now <- getTime mgrClock
-    let !expTime = now + relTime
-    postMgr mgr $ modifyTQ $ Q.insert key expTime cb
+    if relTime <= 0 then cb
+    else do
+      now <- getTime mgrClock
+      let !expTime = now + relTime
+      editTimeouts mgr (Q.insert key expTime cb)
+      -- TODO: wakeManager mgr
     return $ TK key
 
 -- | Update an active timeout to fire in the given number of seconds (from the
@@ -175,7 +171,8 @@ updateTimeout :: Manager -> TimeoutKey -> Seconds -> IO ()
 updateTimeout mgr (TK key) relTime = do
     now <- getTime (mgrClock mgr)
     let !expTime = now + relTime
-    postMgr mgr $ modifyTQ $ Q.adjust (const expTime) key
+    editTimeouts mgr (Q.adjust (const expTime) key)
+    -- TODO: wakeManager mgr
 
 -- | Unregister an active timeout.  This is a harmless no-op if the timeout is
 -- already unregistered or has already fired.
@@ -184,76 +181,39 @@ updateTimeout mgr (TK key) relTime = do
 -- 'unregisterTimeout' completes.
 unregisterTimeout :: Manager -> TimeoutKey -> IO ()
 unregisterTimeout mgr (TK key) =
-    postMgr mgr $ modifyTQ $ Q.delete key
+    editTimeouts mgr (Q.delete key)
+    -- TODO: wakeManager mgr
 
-------------------------------------------------------------------------
--- The Mgr state monad
-
-newtype Mgr a = Mgr { runMgr :: TimeoutQueue -> IO (a, TimeoutQueue) }
-
-instance Functor Mgr where
-    fmap = liftM
-
-instance Applicative Mgr where
-    pure a = Mgr $ \s -> return (a, s)
-    (<*>)  = ap
-
-instance Monad Mgr where
-    return = pure
-    m >>= k = Mgr $ \s -> do
-        (a, s') <- runMgr m s
-        runMgr (k a) s'
-
-liftIO :: IO a -> Mgr a
-liftIO io = Mgr $ \s -> do
-    a <- io
-    return (a, s)
-
-getsTQ :: (TimeoutQueue -> a) -> Mgr a
-getsTQ f = Mgr $ \s -> return (f s, s)
-
-modifyTQ :: (TimeoutQueue -> TimeoutQueue) -> Mgr ()
-modifyTQ f = Mgr $ \s -> do
-    let !s' = f s
-    return ((), s')
-
-stateTQ :: (TimeoutQueue -> (a, TimeoutQueue)) -> Mgr a
-stateTQ f = Mgr $ \s -> do
-    let (a, !s') = f s
-    return (a, s')
-
-mapM_        :: Monad m => (a -> m b) -> [a] -> m ()
-{-# INLINE mapM_ #-}
-mapM_ f xs    =  foldr (>>) (return ()) (map f xs)
+editTimeouts :: Manager -> TimeoutEdit -> IO ()
+editTimeouts mgr g = atomicModifyIORef' (mgrTimeouts mgr) $ \tq -> (g tq, ())
 
 ------------------------------------------------------------------------
 -- I/O manager loop
 
 -- | Call all expired timeouts, and return how much time until the next
 -- | expiration.
-runExpiredTimeouts :: Manager -> Mgr (Maybe Seconds)
+runExpiredTimeouts :: Manager -> IO (Maybe Seconds)
 runExpiredTimeouts Manager{..} = do
-    -- Avoid calling getTime when there are no pending expirations.
-    isNull <- getsTQ Q.null
-    if isNull then
-        return Nothing
-    else do
-        now <- liftIO $ getTime mgrClock
-
-        -- Remove timeouts with expiration <= now, and execute their callbacks.
-        expired <- stateTQ $ Q.atMost now
-        mapM_ (liftIO . Q.value) expired
-
-        -- See how soon the next timeout expires.
-        next <- getsTQ $ fmap Q.prio . Q.findMin
-        case next of
+    now <- getTime mgrClock
+    (expired, delay) <- atomicModifyIORef' mgrTimeouts (mkTimeout now)
+    -- Execute timeout callbacks.
+    mapM_ Q.value expired
+    return delay
+      where
+        mkTimeout :: Seconds -> TimeoutQueue ->
+                     (TimeoutQueue, ([Q.Elem TimeoutCallback], Maybe Seconds))
+        mkTimeout now tq =
+           -- Remove timeouts with expiration <= now.
+           let (expired, tq') = Q.atMost now tq in
+           -- See how soon the next timeout expires.
+           case Q.prio `fmap` Q.findMin tq' of
             Nothing ->
-                return Nothing
-            Just t -> do
+                (tq', (expired, Nothing))
+            Just t ->
                 -- This value will always be positive since the call
                 -- to 'atMost' above removed any timeouts <= 'now'
                 let !t' = t - now
-                return $ Just t'
+                in (tq', (expired, Just t'))
 
 -- | Return the delay argument to pass to GetQueuedCompletionStatus.
 fromTimeout :: Maybe Seconds -> Word32
@@ -262,14 +222,16 @@ fromTimeout (Just sec) | sec > 120  = 120000
                        | sec > 0    = ceiling (sec * 1000)
                        | otherwise  = 0
 
-step :: Manager -> Mgr ()
+step :: Manager -> IO ()
 step mgr@Manager{..} = do
     delay <- runExpiredTimeouts mgr
-    m <- liftIO $ FFI.getNextCompletion mgrIOCP (fromTimeout delay)
+    m <- FFI.getNextCompletion mgrIOCP (fromTimeout delay)
     case m of
         Nothing                      -> return ()
         Just (cb, numBytes, errCode) -> cb errCode numBytes
 
-loop :: Manager -> IO loop
-loop mgr = go Q.empty
-  where go s = runMgr (step mgr) s >>= go . snd
+loop :: Manager -> IO ()
+loop mgr = go
+    where
+      go = do step mgr
+              go
