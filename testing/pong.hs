@@ -5,6 +5,7 @@ module Main where
 import Prelude hiding (log)
 
 import GHC.Event.Windows
+import GHC.Event.Windows.Thread
 import Control.Concurrent
 import Control.Monad        (forever, void)
 import System.IO
@@ -36,7 +37,7 @@ acceptConnections listenSock = loop
         loop
 
 main = do
-  void $ getSystemManager
+  ensureIOManagerIsRunning
   sock <- socket NS.AF_INET NS.Stream NS.defaultProtocol
   addr <- NS.inet_addr "127.0.0.1"
   bind sock (NS.SockAddrInet portNum addr)

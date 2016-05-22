@@ -21,8 +21,8 @@ portNum = 8080
 client sock = do
   recvRequest ""
   withFile "iocp.cabal" ReadMode $ \h -> do
-                fileCont <- hGetContents h
-                sendAll sock (header <> fileCont)
+                fileContents <- hGetContents h
+                sendAll sock (header <> fileContents)
                 sClose sock
  where
    header = "HTTP/1.0 200 OK\r\nConnection: Close\r\nContent-Length: 5\r\n\r\n"
@@ -41,6 +41,5 @@ acceptConnections listenSock = loop
         loop
 
 main = do
-  void $ getSystemManager
   sock <- listenOn (PortNumber portNum)
   runInUnboundThread $ acceptConnections sock

@@ -37,6 +37,5 @@ acceptConnections listenSock = loop
         loop
 
 main = do
-  void $ getSystemManager
   sock <- listenOn (PortNumber portNum)
   runInUnboundThread $ acceptConnections sock

@@ -6,6 +6,7 @@ import Prelude hiding (log)
 
 import Data.Monoid
 import GHC.Event.Windows
+import GHC.Event.Windows.Thread
 import Control.Concurrent
 import Control.Monad        (forever, void)
 import System.IO hiding (hGetContents)
@@ -20,8 +21,8 @@ portNum = 8080
 client sock = do
   recvRequest ""
   withFile "iocp.cabal" ReadMode $ \h -> do
-                fileCont <- hGetContents h
-                sendAll sock (header <> fileCont)
+                fileContents <- hGetContents h
+                sendAll sock (header <> fileContents)
                 close sock
  where
    header = "HTTP/1.0 200 OK\r\nConnection: Close\r\nContent-Length: 5\r\n\r\n"
@@ -40,7 +41,7 @@ acceptConnections listenSock = loop
         loop
 
 main = do
-  void $ getSystemManager
+  ensureIOManagerIsRunning
   sock <- socket NS.AF_INET NS.Stream NS.defaultProtocol
   addr <- NS.inet_addr "127.0.0.1"
   bind sock (NS.SockAddrInet portNum addr)
