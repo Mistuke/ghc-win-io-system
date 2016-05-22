@@ -1,7 +1,9 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE DoAndIfThenElse #-}
 {-# LANGUAGE ForeignFunctionInterface #-}
 {-# LANGUAGE EmptyDataDecls #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 module GHC.Event.Windows.FFI (
     -- * IOCP
@@ -9,13 +11,18 @@ module GHC.Event.Windows.FFI (
     CompletionKey,
     newIOCP,
     associateHandleWithIOCP,
-    getNextCompletion,
+    getQueuedCompletionStatusEx,
     postQueuedCompletionStatus,
 
     -- * Overlapped
     OVERLAPPED,
     LPOVERLAPPED,
-    newOverlapped,
+    OVERLAPPED_ENTRY(..),
+    LPOVERLAPPED_ENTRY,
+    allocOverlapped,
+    zeroOverlapped,
+    pokeOffsetOverlapped,
+    overlappedIOStatus,
 
     -- * Cancel pending I/O
     cancelIoEx,
@@ -33,6 +40,7 @@ module GHC.Event.Windows.FFI (
     throwWinErr,
 ) where
 
+#include <ntstatus.h>
 #include <windows.h>
 
 ##ifdef mingw32_HOST_OS
@@ -46,12 +54,14 @@ module GHC.Event.Windows.FFI (
 ##endif
 
 import Data.Maybe
-import Data.Word
 import Foreign
+import Foreign.C.Types
 import GHC.Base
+import GHC.Enum (fromEnum)
+import GHC.Real (fromIntegral)
 import GHC.Show
 import GHC.Windows
-import System.Win32.Types (LPDWORD)
+import qualified GHC.Event.Array    as A
 import qualified System.Win32.Types as Win32
 
 ------------------------------------------------------------------------
@@ -78,30 +88,32 @@ associateHandleWithIOCP iocp handle completionKey =
     failIf_ (/= iocp) "associateHandleWithIOCP" $
         c_CreateIoCompletionPort handle iocp completionKey 0
 
-foreign import WINDOWS_CCONV safe "windows.h GetQueuedCompletionStatus"
-    c_GetQueuedCompletionStatus :: IOCP -> LPDWORD -> PULONG_PTR
-                                -> Ptr LPOVERLAPPED -> DWORD -> IO BOOL
+foreign import WINDOWS_CCONV safe "windows.h GetQueuedCompletionStatusEx"
+    c_GetQueuedCompletionStatusEx :: IOCP -> LPOVERLAPPED_ENTRY -> Word32
+                                  -> Ptr ULONG -> DWORD -> BOOL -> IO BOOL
 
-getNextCompletion :: IOCP
-                  -> DWORD  -- ^ Timeout in milliseconds (or
-                            -- 'GHC.Windows.iNFINITE')
-                  -> IO (Maybe (LPOVERLAPPED, ErrCode, DWORD))
-getNextCompletion iocp timeout =
-    alloca $ \num_bytes_ptr ->
-    alloca $ \completion_key_ptr ->
-    alloca $ \lpoverlapped_ptr -> do
-        ok <- c_GetQueuedCompletionStatus iocp num_bytes_ptr completion_key_ptr
-              lpoverlapped_ptr timeout
-        err <- if ok then return #{const ERROR_SUCCESS}
-               else getLastError
-        if ok then do
-            lpol      <- peek lpoverlapped_ptr
-            num_bytes <- peek num_bytes_ptr
-            return $ Just (lpol, err, num_bytes)
-        else if err == #{const WAIT_TIMEOUT} then
-            return Nothing
-        else
-            failWith "GetQueuedCompletionStatus" err
+getQueuedCompletionStatusEx :: IOCP
+                            -> A.Array OVERLAPPED_ENTRY
+                            -> DWORD  -- ^ Timeout in milliseconds (or
+                                      -- 'GHC.Windows.iNFINITE')
+                            -> IO Int
+getQueuedCompletionStatusEx iocp arr timeout =
+    alloca $ \num_removed_ptr ->do
+        A.unsafeLoad arr $ \oes cap -> do
+            ok <- c_GetQueuedCompletionStatusEx iocp oes (fromIntegral cap)
+                  num_removed_ptr timeout False
+            if ok then fromEnum `fmap` peek num_removed_ptr
+            else do err <- getLastError
+                    if err == #{const WAIT_TIMEOUT} then return 0
+                    else failWith "GetQueuedCompletionStatusEx" err
+
+overlappedIOStatus :: LPOVERLAPPED -> IO ErrCode
+overlappedIOStatus lpol = do
+  status <- #{peek OVERLAPPED, Internal} lpol
+  if status == #{const STATUS_SUCCESS} then return #{const ERROR_SUCCESS}
+  -- TODO: Map NTSTATUS to ErrCode?
+  -- See https://github.com/libuv/libuv/blob/b12624c13693c4d29ca84b3556eadc9e9c0936a4/src/win/winsock.c#L153
+  else return status
 
 foreign import WINDOWS_CCONV unsafe "windows.h PostQueuedCompletionStatus"
     c_PostQueuedCompletionStatus :: IOCP -> DWORD -> ULONG_PTR -> LPOVERLAPPED
@@ -123,19 +135,58 @@ data OVERLAPPED
 -- for overlapped I/O functions (e.g. @ReadFile@, @WSASend@).
 type LPOVERLAPPED = Ptr OVERLAPPED
 
+-- | An array of these is passed to GetQueuedCompletionStatusEx as an output
+-- argument.
+data OVERLAPPED_ENTRY = OVERLAPPED_ENTRY {
+      lpCompletionKey            :: ULONG_PTR,
+      lpOverlapped               :: LPOVERLAPPED,
+      dwNumberOfBytesTransferred :: DWORD
+    }
+
+type LPOVERLAPPED_ENTRY = Ptr OVERLAPPED_ENTRY
+
+instance Storable OVERLAPPED_ENTRY where
+    sizeOf _    = #{size OVERLAPPED_ENTRY}
+    alignment _ = alignment (undefined :: CInt)
+
+    peek ptr = do
+      lpCompletionKey <- #{peek OVERLAPPED_ENTRY, lpCompletionKey} ptr
+      lpOverlapped    <- #{peek OVERLAPPED_ENTRY, lpOverlapped} ptr
+      dwNumberOfBytesTransferred <-
+          #{peek OVERLAPPED_ENTRY, dwNumberOfBytesTransferred} ptr
+      let !oe = OVERLAPPED_ENTRY{..}
+      return oe
+
+    poke ptr OVERLAPPED_ENTRY{..} = do
+      #{poke OVERLAPPED_ENTRY, lpCompletionKey} ptr lpCompletionKey
+      #{poke OVERLAPPED_ENTRY, lpOverlapped} ptr lpOverlapped
+      #{poke OVERLAPPED_ENTRY, dwNumberOfBytesTransferred}
+        ptr dwNumberOfBytesTransferred
+
 -- | Allocate a new
 -- <http://msdn.microsoft.com/en-us/library/windows/desktop/ms684342%28v=vs.85%29.aspx
 -- OVERLAPPED> structure.
-newOverlapped :: Word64 -- ^ Offset/OffsetHigh
-              -> IO (ForeignPtr OVERLAPPED)
-newOverlapped offset = do
+allocOverlapped :: Word64 -- ^ Offset/OffsetHigh
+                -> IO (ForeignPtr OVERLAPPED)
+allocOverlapped offset = do
   fptr <- mallocForeignPtrBytes #{size OVERLAPPED}
-  withForeignPtr fptr $ \p ->
-      do fillBytes p 0 #{size OVERLAPPED}
-         let (offsetLow, offsetHigh) = Win32.ddwordToDwords offset
-         #{poke OVERLAPPED, Offset} p offsetLow
-         #{poke OVERLAPPED, OffsetHigh} p offsetHigh
+  withForeignPtr fptr $ \lpol ->
+      do zeroOverlapped lpol
+         pokeOffsetOverlapped lpol offset
   return fptr
+
+-- | Zero-fill an OVERLAPPED structure.
+zeroOverlapped :: LPOVERLAPPED -> IO ()
+zeroOverlapped lpol = fillBytes lpol 0 #{size OVERLAPPED}
+{-# INLINE zeroOverlapped #-}
+
+-- | Set the offset field in an OVERLAPPED structure.
+pokeOffsetOverlapped :: LPOVERLAPPED -> Word64 -> IO ()
+pokeOffsetOverlapped lpol offset = do
+  let (offsetLow, offsetHigh) = Win32.ddwordToDwords offset
+  #{poke OVERLAPPED, Offset} lpol offsetLow
+  #{poke OVERLAPPED, OffsetHigh} lpol offsetHigh
+{-# INLINE pokeOffsetOverlapped #-}
 
 ------------------------------------------------------------------------
 -- Cancel pending I/O
@@ -220,8 +271,8 @@ callQP qpfunc =
 ------------------------------------------------------------------------
 -- Miscellaneous
 
+type ULONG      = #type ULONG
 type ULONG_PTR  = #type ULONG_PTR
-type PULONG_PTR = Ptr ULONG_PTR
 
 throwWinErr :: String -> ErrCode -> IO a
 throwWinErr loc err = do

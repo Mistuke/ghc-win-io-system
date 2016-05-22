@@ -26,7 +26,7 @@ module GHC.Event.Windows (
 ) where
 
 import GHC.Event.Windows.Clock   (Clock, Seconds, getClock, getTime)
-import GHC.Event.Windows.FFI     (OVERLAPPED, LPOVERLAPPED)
+import GHC.Event.Windows.FFI     (OVERLAPPED, LPOVERLAPPED, OVERLAPPED_ENTRY(..))
 import qualified GHC.Event.Windows.FFI    as FFI
 import qualified GHC.Event.PSQ            as Q
 import qualified GHC.Event.IntTable       as IT
@@ -40,6 +40,7 @@ import Data.Word
 import Foreign       hiding (new)
 import Foreign.Ptr   (ptrToIntPtr)
 import Foreign.ForeignPtr.Unsafe
+import qualified GHC.Event.Array    as A
 import GHC.Arr (Array, (!), listArray)
 import GHC.Base
 import GHC.List (replicate)
@@ -64,6 +65,8 @@ data Manager = Manager
     , mgrTimeouts     :: {-# UNPACK #-} !(IORef TimeoutQueue)
     , mgrCallbacks    :: {-# UNPACK #-}
                          !(Array Int (MVar (IT.IntTable CompletionData)))
+    , mgrOverlappedEntries
+                      :: {-#UNPACK #-} !(A.Array OVERLAPPED_ENTRY)
     }
 
 new :: IO Manager
@@ -74,11 +77,12 @@ new = do
     mgrTimeouts     <- newIORef Q.empty
     mgrCallbacks    <- fmap (listArray (0, callbackArraySize-1)) $
            replicateM callbackArraySize (newMVar =<< IT.new 8)
-    let mgr = Manager{..}
+    mgrOverlappedEntries <- A.new 64
+    let !mgr = Manager{..}
     _tid <- forkIO $ loop mgr
     return mgr
-        where
-          replicateM n x = sequence (replicate n x)
+      where
+        replicateM n x = sequence (replicate n x)
 
 
 getSystemManager :: IO (Maybe Manager)
@@ -151,8 +155,7 @@ withOverlapped mgr h offset startCB completionCB = do
     mask_ $ do
         let completionCB' e b =
                 (completionCB e b >>= signalReturn) `E.catch` signalThrow
-        -- TODO: Add a pool for OVERLAPPED structures.
-        fptr <- FFI.newOverlapped offset
+        fptr <- FFI.allocOverlapped offset
         let lpol = unsafeForeignPtrToPtr fptr
         _ <- withMVar (callbackTableVar mgr lpol) $ \tbl ->
              IT.insertWith (flip const) (lpoverlappedToInt lpol)
@@ -264,15 +267,19 @@ fromTimeout (Just sec) | sec > 120  = 120000
 step :: Manager -> IO ()
 step mgr@Manager{..} = do
     delay <- runExpiredTimeouts mgr
-    m <- FFI.getNextCompletion mgrIOCP (fromTimeout delay)
-    case m of
-        Nothing                      -> return ()
-        Just (lpol, errCode, numBytes) -> do
-            mCD <- withMVar (callbackTableVar mgr lpol) $ \tbl ->
-                IT.delete (lpoverlappedToInt lpol) tbl
-            case mCD of
-              Nothing                    -> return ()
-              Just (CompletionData _ cb) -> cb errCode numBytes
+    n <- FFI.getQueuedCompletionStatusEx mgrIOCP mgrOverlappedEntries
+         (fromTimeout delay)
+    when (n > 0) $ do
+      A.forM_ mgrOverlappedEntries $ \oe -> do
+          mCD <- withMVar (callbackTableVar mgr (lpOverlapped oe)) $ \tbl ->
+                   IT.delete (lpoverlappedToInt (lpOverlapped oe)) tbl
+          case mCD of
+            Nothing                        -> return ()
+            Just (CompletionData _fptr cb) -> do
+                         status <- FFI.overlappedIOStatus (lpOverlapped oe)
+                         cb status (dwNumberOfBytesTransferred oe)
+      cap <- A.capacity mgrOverlappedEntries
+      when (cap == n) $ A.ensureCapacity mgrOverlappedEntries (2*cap)
 
 loop :: Manager -> IO ()
 loop mgr = go
