@@ -19,13 +19,12 @@ handleEOF = handleJust (guard . isEOFError) (\_ -> return ())
 maybeGetTime :: Maybe Clock -> IO (Maybe Seconds)
 maybeGetTime = maybe (return Nothing) (fmap Just . getTime)
 
-formatTimes :: Seconds -> Maybe Seconds -> Maybe Seconds -> String
-formatTimes gtc gtc64 qpc =
+formatTimes :: Seconds -> Maybe Seconds -> String
+formatTimes gtc64 qpc =
     concat $ map (pad 16)
-    [ pad 16 $ show gtc
-    , pad 16 $ maybe "n/a" show gtc64
+    [ pad 16 $ show gtc64
     , pad 25 $ maybe "n/a" show qpc
-    , maybe "n/a" show $ liftA2 (-) qpc (gtc64 <|> Just gtc)
+    , maybe "n/a" show $ liftA2 (-) qpc (Just gtc64)
     ]
 
 pad :: Int -> String -> String
@@ -34,22 +33,18 @@ pad n str = str ++ replicate (n - length str) ' '
 main :: IO ()
 main = do
     mapM_ (`hSetBuffering` LineBuffering) [stdout, stderr]
-    gtc   <- getTickCount
     gtc64 <- getTickCount64
     qpc   <- queryPerformanceCounter
 
-    when (isNothing gtc64) $
-        putStrLn "GetTickCount64 not available"
     when (isNothing qpc) $
         putStrLn "QueryPerformanceCounter not available"
 
-    let printTimes = liftM3 formatTimes (getTime gtc)
-                                        (maybeGetTime gtc64)
+    let printTimes = liftM2 formatTimes (getTime gtc64)
                                         (maybeGetTime qpc)
                  >>= putStrLn
 
     putStrLn ""
-    putStrLn "GetTickCount    GetTickCount64  QueryPerformanceCounter  QPC-GTC"
+    putStrLn "GetTickCount64  QueryPerformanceCounter  QPC-GTC64"
 
     handleEOF $ forever $ do
         printTimes

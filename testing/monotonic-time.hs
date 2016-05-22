@@ -18,28 +18,21 @@ handleEOF = handleJust (guard . isEOFError) (\_ -> return ())
 main :: IO ()
 main = do
     mapM_ (`hSetBuffering` LineBuffering) [stdout, stderr]
-    gtc64 <- loadGetTickCount64
     freq  <- queryPerformanceFrequency
 
-    when (isNothing gtc64) $
-        putStrLn "GetTickCount64 not available"
     when (isNothing freq) $
         putStrLn "QueryPerformanceCounter not available"
 
     let printTimes = do
-            t   <- getTickCount
-            t64 <- maybe (return Nothing) (fmap Just) gtc64
+            t64 <- getTickCount64
             qpc <- case freq of
                 Nothing -> return Nothing
                 Just f  -> (\c -> Just (c, f)) <$> queryPerformanceCounter
-            putStrLn $ formatTimes t t64 qpc
+            putStrLn $ formatTimes t64 qpc
 
-        formatTimes t t64 qpc =
+        formatTimes t64 qpc =
             concat $ intersperse "\t"
-            [ show t ++ "ms"
-            , case t64 of
-                  Nothing    -> "n/a     "
-                  Just x     -> show x ++ "ms"
+            [ show t64 ++ "ms"
             , case qpc of
                   Nothing    -> "n/a"
                   Just (n,d) ->
@@ -52,7 +45,7 @@ main = do
         divTime n d = fromIntegral n / fromIntegral d :: Double
 
     putStrLn ""
-    putStrLn "GetTickCount\tGetTickCount64\tQueryPerformanceCounter"
+    putStrLn "GetTickCount64\tQueryPerformanceCounter"
 
     handleEOF $ forever $ do
         printTimes

@@ -21,8 +21,7 @@ module GHC.Event.Windows.FFI (
     -- * Monotonic time
 
     -- ** GetTickCount
-    getTickCount,
-    loadGetTickCount64,
+    getTickCount64,
 
     -- ** QueryPerformanceCounter
     queryPerformanceCounter,
@@ -160,68 +159,19 @@ cancelIoEx h o = failIfFalse_ "CancelIoEx" . c_CancelIoEx h $ o
 ------------------------------------------------------------------------
 -- Monotonic time
 
-foreign import WINDOWS_CCONV "windows.h GetTickCount"
-    c_GetTickCount :: IO #{type DWORD}
+foreign import WINDOWS_CCONV "windows.h GetTickCount64"
+    c_GetTickCount64 :: IO #{type ULONGLONG}
 
--- | Call the @GetTickCount@ function, which returns a monotonic time in
+-- | Call the @GetTickCount64@ function, which returns a monotonic time in
 -- milliseconds.
 --
 -- Problems:
 --
 --  * Low resolution (10 to 16 milliseconds).
 --
---  * Wraps around when the system runs continuously for 49.7 days.
---
---  * Not available for Windows Store apps.
---
 -- <http://msdn.microsoft.com/en-us/library/windows/desktop/ms724408%28v=vs.85%29.aspx>
-getTickCount :: IO Word32
-getTickCount = c_GetTickCount
-
-type C_GetTickCount64 = IO #{type ULONGLONG}
-
--- Defined in cbits/dll.c
-foreign import ccall
-    iocp_load_GetTickCount64 :: IO (FunPtr C_GetTickCount64)
-
-foreign import WINDOWS_CCONV "dynamic"
-    mkGetTickCount64 :: FunPtr C_GetTickCount64 -> C_GetTickCount64
-
--- | Load the @GetTickCount64@ function, or return 'Nothing' if it is
--- not available.
---
--- Problems:
---
---  * Low resolution (10 to 16 milliseconds).
---
---  * Introduced in Windows Vista, so not available under Windows XP.
---
--- <http://msdn.microsoft.com/en-us/library/windows/desktop/ms724411%28v=vs.85%29.aspx>
-loadGetTickCount64 :: IO (Maybe (IO Word64))
-loadGetTickCount64 = do
-    fun <- iocp_load_GetTickCount64
-    if fun == nullFunPtr then
-        return Nothing
-    else
-        return $ Just $ mkGetTickCount64 fun
-
-type QPFunc = Ptr Int64 -> IO BOOL
-
-foreign import WINDOWS_CCONV "Windows.h QueryPerformanceCounter"
-    c_QueryPerformanceCounter :: QPFunc
-
-foreign import WINDOWS_CCONV "Windows.h QueryPerformanceFrequency"
-    c_QueryPerformanceFrequency :: QPFunc
-
-callQP :: QPFunc -> IO (Maybe Int64)
-callQP qpfunc =
-    allocaBytes #{size LARGE_INTEGER} $ \ptr -> do
-        ok <- qpfunc ptr
-        if ok then do
-            n <- #{peek LARGE_INTEGER, QuadPart} ptr
-            return (Just n)
-        else
-            return Nothing
+getTickCount64 :: IO Word64
+getTickCount64 = c_GetTickCount64
 
 -- | Call the @QueryPerformanceCounter@ function.
 --
@@ -254,6 +204,24 @@ queryPerformanceFrequency = do
         Just 0    -> return Nothing -- Shouldn't happen; just a safeguard to
                                     -- avoid a zero denominator.
         Just freq -> return (Just freq)
+
+type QPFunc = Ptr Int64 -> IO BOOL
+
+foreign import WINDOWS_CCONV "Windows.h QueryPerformanceCounter"
+    c_QueryPerformanceCounter :: QPFunc
+
+foreign import WINDOWS_CCONV "Windows.h QueryPerformanceFrequency"
+    c_QueryPerformanceFrequency :: QPFunc
+
+callQP :: QPFunc -> IO (Maybe Int64)
+callQP qpfunc =
+    allocaBytes #{size LARGE_INTEGER} $ \ptr -> do
+        ok <- qpfunc ptr
+        if ok then do
+            n <- #{peek LARGE_INTEGER, QuadPart} ptr
+            return (Just n)
+        else
+            return Nothing
 
 ------------------------------------------------------------------------
 -- Miscellaneous
