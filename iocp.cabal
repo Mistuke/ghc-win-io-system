@@ -44,6 +44,10 @@ library
                     , Win32
                     , network
 
+flag all-tests
+    Description: Enable all test exes
+    Default:     False
+
 executable pong
     main-is: pong.hs
     hs-source-dirs: testing
@@ -61,36 +65,60 @@ executable file
     hs-source-dirs: testing
     build-depends: ansi-terminal, base, bytestring, iocp, network
     ghc-options: -threaded -rtsopts
+    if flag(all-tests)
+       buildable: True
+    else
+       buildable: False
 
 executable file-baseline
     main-is: file-baseline.hs
     hs-source-dirs: testing
     build-depends: ansi-terminal, base, bytestring, iocp, network
     ghc-options: -threaded -rtsopts
+    if flag(all-tests)
+       buildable: True
+    else
+       buildable: False
 
 executable clock
     main-is: clock.hs
     hs-source-dirs: testing
     build-depends: ansi-terminal, base, iocp
     ghc-options: -threaded -rtsopts
+    if flag(all-tests)
+       buildable: True
+    else
+       buildable: False
 
 executable close-while-pending
     main-is: close-while-pending.hs
     hs-source-dirs: testing
     build-depends: base, bytestring, iocp, network
     ghc-options: -threaded -rtsopts
+    if flag(all-tests)
+       buildable: True
+    else
+       buildable: False
 
 executable close-without-shutdown
     main-is: close-without-shutdown.hs
     hs-source-dirs: testing
     build-depends: base, bytestring, iocp, network
     ghc-options: -threaded -rtsopts
+    if flag(all-tests)
+       buildable: True
+    else
+       buildable: False
 
 executable monotonic-time
     main-is: monotonic-time.hs
     hs-source-dirs: testing
     build-depends: ansi-terminal, base, iocp
     ghc-options: -threaded -rtsopts
+    if flag(all-tests)
+       buildable: True
+    else
+       buildable: False
 
 executable recv-bench
     main-is: recv-bench.hs
@@ -103,27 +131,47 @@ executable recv
     hs-source-dirs: testing
     build-depends: base, iocp, network
     ghc-options: -threaded -rtsopts
+    if flag(all-tests)
+       buildable: True
+    else
+       buildable: False
 
 executable send-buffer-full
     main-is: send-buffer-full.hs
     hs-source-dirs: testing
     build-depends: base, bytestring, iocp, network
     ghc-options: -threaded -rtsopts
+    if flag(all-tests)
+       buildable: True
+    else
+       buildable: False
 
 executable send
     main-is: send.hs
     hs-source-dirs: testing
     build-depends: base, bytestring, iocp, network
     ghc-options: -threaded -rtsopts
+    if flag(all-tests)
+       buildable: True
+    else
+       buildable: False
 
 executable send-recv
     main-is: send-recv.hs
     hs-source-dirs: testing
     build-depends: base, bytestring, iocp, network
     ghc-options: -threaded -rtsopts
+    if flag(all-tests)
+       buildable: True
+    else
+       buildable: False
 
 executable trivial
     main-is: trivial.hs
     hs-source-dirs: testing
     build-depends: base, iocp, network
     ghc-options: -threaded -rtsopts
+    if flag(all-tests)
+       buildable: True
+    else
+       buildable: False
