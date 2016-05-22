@@ -21,6 +21,9 @@ source-repository head
 
 library
     exposed-modules:
+        GHC.Event.Arr
+        GHC.Event.Array
+        GHC.Event.IntTable
         GHC.Event.PSQ
         GHC.Event.Unique
         GHC.Event.Windows
@@ -39,6 +42,7 @@ library
     cc-options: -Wall
 
     build-depends   : base == 4.*
+                    , ghc-prim
                     , bytestring
                     , containers
                     , Win32
