@@ -14,7 +14,7 @@ module GHC.Event.Windows (
     withOverlapped,
     StartCallback,
     CompletionCallback,
-    Overlapped(..),
+    LPOVERLAPPED,
 
     -- * Timeouts
     TimeoutCallback,
@@ -26,9 +26,10 @@ module GHC.Event.Windows (
 ) where
 
 import GHC.Event.Windows.Clock   (Clock, Seconds, getClock, getTime)
-import GHC.Event.Windows.FFI     (Overlapped(..))
+import GHC.Event.Windows.FFI     (OVERLAPPED, LPOVERLAPPED)
 import qualified GHC.Event.Windows.FFI    as FFI
 import qualified GHC.Event.PSQ            as Q
+import qualified GHC.Event.IntTable       as IT
 
 import Control.Exception as E
 import Control.Concurrent
@@ -36,7 +37,12 @@ import Data.IORef
 import Data.Foldable (mapM_)
 import Data.Maybe
 import Data.Word
+import Foreign       hiding (new)
+import Foreign.Ptr   (ptrToIntPtr)
+import Foreign.ForeignPtr.Unsafe
+import GHC.Arr (Array, (!), listArray)
 import GHC.Base
+import GHC.List (replicate)
 import GHC.Event.Unique
 import GHC.Num
 import GHC.Real
@@ -46,11 +52,18 @@ import System.IO.Unsafe     (unsafePerformIO)
 ------------------------------------------------------------------------
 -- Manager
 
+type IOCallback = CompletionCallback ()
+
+data CompletionData = CompletionData {-# UNPACK #-} !(ForeignPtr OVERLAPPED)
+                                     !IOCallback
+
 data Manager = Manager
-    { mgrIOCP         :: {-# UNPACK #-} !(FFI.IOCP (CompletionCallback ()))
+    { mgrIOCP         :: {-# UNPACK #-} !FFI.IOCP
     , mgrClock        ::                !Clock
     , mgrUniqueSource :: {-# UNPACK #-} !UniqueSource
     , mgrTimeouts     :: {-# UNPACK #-} !(IORef TimeoutQueue)
+    , mgrCallbacks    :: {-# UNPACK #-}
+                         !(Array Int (MVar (IT.IntTable CompletionData)))
     }
 
 new :: IO Manager
@@ -59,9 +72,14 @@ new = do
     mgrClock        <- getClock
     mgrUniqueSource <- newSource
     mgrTimeouts     <- newIORef Q.empty
+    mgrCallbacks    <- fmap (listArray (0, callbackArraySize-1)) $
+           replicateM callbackArraySize (newMVar =<< IT.new 8)
     let mgr = Manager{..}
     _tid <- forkIO $ loop mgr
     return mgr
+        where
+          replicateM n x = sequence (replicate n x)
+
 
 getSystemManager :: IO (Maybe Manager)
 getSystemManager = readIORef managerRef
@@ -73,8 +91,21 @@ managerRef = unsafePerformIO $
         else newIORef Nothing
 {-# NOINLINE managerRef #-}
 
-newOverlapped :: Word64 -> CompletionCallback a -> IO Overlapped
-newOverlapped = FFI.newOverlapped
+-- must be power of 2
+callbackArraySize :: Int
+callbackArraySize = 32
+
+lpoverlappedToInt :: LPOVERLAPPED -> Int
+lpoverlappedToInt lpol = fromIntegral (ptrToIntPtr lpol)
+{-# INLINE lpoverlappedToInt #-}
+
+hashOverlapped :: LPOVERLAPPED -> Int
+hashOverlapped lpol = (lpoverlappedToInt lpol) .&. (callbackArraySize - 1)
+{-# INLINE hashOverlapped #-}
+
+callbackTableVar :: Manager -> LPOVERLAPPED -> MVar (IT.IntTable CompletionData)
+callbackTableVar mgr lpol = mgrCallbacks mgr ! hashOverlapped lpol
+{-# INLINE callbackTableVar #-}
 
 ------------------------------------------------------------------------
 -- Overlapped I/O
@@ -83,7 +114,7 @@ newOverlapped = FFI.newOverlapped
 -- It must return successfully if and only if an I/O completion has been
 -- queued.  Otherwise, it must throw an exception, which 'withOverlapped'
 -- will rethrow.
-type StartCallback = Overlapped -> IO ()
+type StartCallback = LPOVERLAPPED -> IO ()
 
 -- | Called when the completion is delivered.
 type CompletionCallback a = ErrCode   -- ^ 0 indicates success
@@ -94,7 +125,7 @@ type CompletionCallback a = ErrCode   -- ^ 0 indicates success
 -- done before using the handle with 'withOverlapped'.
 associateHandle :: Manager -> HANDLE -> IO ()
 associateHandle Manager{..} h =
-    FFI.associateHandleWithIOCP mgrIOCP h
+    FFI.associateHandleWithIOCP mgrIOCP h 0
 
 -- | Start an overlapped I/O operation, and wait for its completion.  If
 -- 'withOverlapped' is interrupted by an asynchronous exception, the operation
@@ -103,13 +134,14 @@ associateHandle Manager{..} h =
 -- 'withOverlapped' waits for a completion to arrive before returning or
 -- throwing an exception.  This means you can use functions like
 -- 'Foreign.Marshal.Alloc.alloca' to allocate buffers for the operation.
-withOverlapped :: HANDLE
+withOverlapped :: Manager
+               -> HANDLE
                -> Word64 -- ^ Value to use for the @OVERLAPPED@
                          --   structure's Offset/OffsetHigh members.
                -> StartCallback
                -> CompletionCallback a
                -> IO a
-withOverlapped h offset startCB completionCB = do
+withOverlapped mgr h offset startCB completionCB = do
     signal <- newEmptyMVar
     let signalReturn a = do _ <- tryPutMVar signal $ return a
                             return ()
@@ -119,12 +151,19 @@ withOverlapped h offset startCB completionCB = do
     mask_ $ do
         let completionCB' e b =
                 (completionCB e b >>= signalReturn) `E.catch` signalThrow
-        ol <- newOverlapped offset completionCB'
+        -- TODO: Add a pool for OVERLAPPED structures.
+        fptr <- FFI.newOverlapped offset
+        let lpol = unsafeForeignPtrToPtr fptr
+        _ <- withMVar (callbackTableVar mgr lpol) $ \tbl ->
+             IT.insertWith (flip const) (lpoverlappedToInt lpol)
+               (CompletionData fptr completionCB') tbl
 
-        startCB ol `E.catch` \ex -> do FFI.discardOverlapped ol
-                                       signalThrow ex
+        startCB lpol `E.catch` \ex -> do
+              _ <- withMVar (callbackTableVar mgr lpol) $ \tbl ->
+                   IT.delete (lpoverlappedToInt lpol) tbl
+              signalThrow ex
 
-        let cancel = uninterruptibleMask_ $ FFI.cancelIoEx h ol
+        let cancel = uninterruptibleMask_ $ FFI.cancelIoEx h lpol
         join (takeMVar signal `onException` cancel)
 
 ------------------------------------------------------------------------
@@ -228,7 +267,12 @@ step mgr@Manager{..} = do
     m <- FFI.getNextCompletion mgrIOCP (fromTimeout delay)
     case m of
         Nothing                      -> return ()
-        Just (cb, numBytes, errCode) -> cb errCode numBytes
+        Just (lpol, errCode, numBytes) -> do
+            mCD <- withMVar (callbackTableVar mgr lpol) $ \tbl ->
+                IT.delete (lpoverlappedToInt lpol) tbl
+            case mCD of
+              Nothing                    -> return ()
+              Just (CompletionData _ cb) -> cb errCode numBytes
 
 loop :: Manager -> IO ()
 loop mgr = go

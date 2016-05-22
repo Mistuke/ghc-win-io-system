@@ -33,7 +33,6 @@ library
         Network.Winsock
 
     c-sources:
-        cbits/iocp.c
         cbits/Winsock.c
 
     build-tools: hsc2hs

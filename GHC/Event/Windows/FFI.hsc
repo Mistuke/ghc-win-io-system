@@ -1,19 +1,21 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE DoAndIfThenElse #-}
 {-# LANGUAGE ForeignFunctionInterface #-}
+{-# LANGUAGE EmptyDataDecls #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 module GHC.Event.Windows.FFI (
     -- * IOCP
     IOCP(..),
+    CompletionKey,
     newIOCP,
     associateHandleWithIOCP,
     getNextCompletion,
-    postCompletion,
+    postQueuedCompletionStatus,
 
     -- * Overlapped
-    Overlapped(..),
+    OVERLAPPED,
+    LPOVERLAPPED,
     newOverlapped,
-    discardOverlapped,
 
     -- * Cancel pending I/O
     cancelIoEx,
@@ -43,105 +45,97 @@ module GHC.Event.Windows.FFI (
 ## endif
 ##endif
 
-import Control.Exception hiding (handle)
 import Data.Maybe
 import Data.Word
 import Foreign
 import GHC.Base
 import GHC.Show
 import GHC.Windows
+import System.Win32.Types (LPDWORD)
 import qualified System.Win32.Types as Win32
 
 ------------------------------------------------------------------------
 -- IOCP
 
--- |
---
--- The type variable @a@ represents additional data each completion carries
--- with it.  After associating a 'HANDLE' with a completion port, you must not
--- initiate IO on it with @OVERLAPPED@ structures other than those created by
--- 'newOverlapped' with the same type.
-newtype IOCP a = IOCP HANDLE
+-- | An I/O completion port.
+newtype IOCP = IOCP HANDLE
     deriving (Eq, Ord, Show)
 
+type CompletionKey = ULONG_PTR
+
 foreign import WINDOWS_CCONV unsafe "windows.h CreateIoCompletionPort"
-    c_CreateIoCompletionPort :: HANDLE -> IOCP a -> ULONG_PTR -> DWORD -> IO (IOCP a)
+    c_CreateIoCompletionPort :: HANDLE -> IOCP -> ULONG_PTR -> DWORD
+                             -> IO IOCP
 
-newIOCP :: IO (IOCP a)
-newIOCP =
-    failIf (== IOCP nullPtr) "newIOCP" $
-        c_CreateIoCompletionPort iNVALID_HANDLE_VALUE (IOCP nullPtr) 0 1
+-- | Create a new I/O completion port.
+newIOCP :: IO IOCP
+newIOCP = failIf (== IOCP nullPtr) "newIOCP" $
+          c_CreateIoCompletionPort iNVALID_HANDLE_VALUE (IOCP nullPtr) 0 1
 
-associateHandleWithIOCP :: IOCP a -> HANDLE -> IO ()
-associateHandleWithIOCP iocp handle =
+-- | Associate a HANDLE with an I/O completion port.
+associateHandleWithIOCP :: IOCP -> HANDLE -> CompletionKey -> IO ()
+associateHandleWithIOCP iocp handle completionKey =
     failIf_ (/= iocp) "associateHandleWithIOCP" $
-        c_CreateIoCompletionPort handle iocp 0 0
+        c_CreateIoCompletionPort handle iocp completionKey 0
 
-foreign import ccall safe
-    c_iocp_get_next_completion
-        :: IOCP a -> DWORD
-        -> Ptr DWORD -> Ptr DWORD -> Ptr (StablePtr a) -> IO BOOL
+foreign import WINDOWS_CCONV safe "windows.h GetQueuedCompletionStatus"
+    c_GetQueuedCompletionStatus :: IOCP -> LPDWORD -> PULONG_PTR
+                                -> Ptr LPOVERLAPPED -> DWORD -> IO BOOL
 
-getNextCompletion :: IOCP a
-                  -> DWORD  -- ^ Timeout in milliseconds (or 'GHC.Windows.iNFINITE')
-                  -> IO (Maybe (a, DWORD, ErrCode))
+getNextCompletion :: IOCP
+                  -> DWORD  -- ^ Timeout in milliseconds (or
+                            -- 'GHC.Windows.iNFINITE')
+                  -> IO (Maybe (LPOVERLAPPED, ErrCode, DWORD))
 getNextCompletion iocp timeout =
     alloca $ \num_bytes_ptr ->
-    alloca $ \err_ptr ->
-    alloca $ \userdata_ptr -> do
-        ok <- c_iocp_get_next_completion
-                  iocp timeout
-                  num_bytes_ptr err_ptr userdata_ptr
-        err <- peek err_ptr
+    alloca $ \completion_key_ptr ->
+    alloca $ \lpoverlapped_ptr -> do
+        ok <- c_GetQueuedCompletionStatus iocp num_bytes_ptr completion_key_ptr
+              lpoverlapped_ptr timeout
+        err <- if ok then return #{const ERROR_SUCCESS}
+               else getLastError
         if ok then do
+            lpol      <- peek lpoverlapped_ptr
             num_bytes <- peek num_bytes_ptr
-            a         <- peek userdata_ptr >>= takeStablePtr
-            return $ Just (a, num_bytes, err)
+            return $ Just (lpol, err, num_bytes)
         else if err == #{const WAIT_TIMEOUT} then
             return Nothing
         else
             failWith "GetQueuedCompletionStatus" err
 
 foreign import WINDOWS_CCONV unsafe "windows.h PostQueuedCompletionStatus"
-    c_PostQueuedCompletionStatus :: IOCP a -> DWORD -> ULONG_PTR -> Overlapped -> IO BOOL
+    c_PostQueuedCompletionStatus :: IOCP -> DWORD -> ULONG_PTR -> LPOVERLAPPED
+                                 -> IO BOOL
 
-postCompletion :: IOCP a -> DWORD -> Overlapped -> IO ()
-postCompletion iocp numBytes ol =
+postQueuedCompletionStatus :: IOCP -> DWORD -> CompletionKey -> LPOVERLAPPED
+                           -> IO ()
+postQueuedCompletionStatus iocp numBytes completionKey lpol =
     failIfFalse_ "PostQueuedCompletionStatus" $
-    c_PostQueuedCompletionStatus iocp numBytes 0 ol
+    c_PostQueuedCompletionStatus iocp numBytes completionKey lpol
 
 ------------------------------------------------------------------------
 -- Overlapped
 
+-- | Tag type for @LPOVERLAPPED@.
+data OVERLAPPED
+
 -- | Identifies an I/O operation.  Used as the @LPOVERLAPPED@ parameter
 -- for overlapped I/O functions (e.g. @ReadFile@, @WSASend@).
-newtype Overlapped = Overlapped (Ptr ())
-    deriving (Eq, Ord, Show)
-
-foreign import ccall unsafe
-    c_iocp_new_overlapped :: Word64 -> StablePtr a -> IO Overlapped
+type LPOVERLAPPED = Ptr OVERLAPPED
 
 -- | Allocate a new
--- <http://msdn.microsoft.com/en-us/library/windows/desktop/ms684342%28v=vs.85%29.aspx OVERLAPPED>
--- structure.  The resulting pointer may be passed to a system call that takes
--- an @LPOVERLAPPED@, provided the @HANDLE@ was associated with an 'IOCP' with
--- the same type @a@.
+-- <http://msdn.microsoft.com/en-us/library/windows/desktop/ms684342%28v=vs.85%29.aspx
+-- OVERLAPPED> structure.
 newOverlapped :: Word64 -- ^ Offset/OffsetHigh
-              -> a      -- ^ Application context (stored alongside the
-                        -- @OVERLAPPED@ structure)
-              -> IO Overlapped
-newOverlapped offset ctx =
-    bracketOnError (newStablePtr ctx) freeStablePtr $ \ptr ->
-        failIf (== Overlapped nullPtr) "newOverlapped" $
-            c_iocp_new_overlapped offset ptr
-
-foreign import ccall unsafe
-    c_iocp_finish_overlapped :: Overlapped -> IO (StablePtr a)
-
--- | Discard an 'Overlapped' object.  This should be called if and only if
--- no pending I/O was produced after all.
-discardOverlapped :: Overlapped -> IO ()
-discardOverlapped o = c_iocp_finish_overlapped o >>= freeStablePtr
+              -> IO (ForeignPtr OVERLAPPED)
+newOverlapped offset = do
+  fptr <- mallocForeignPtrBytes #{size OVERLAPPED}
+  withForeignPtr fptr $ \p ->
+      do fillBytes p 0 #{size OVERLAPPED}
+         let (offsetLow, offsetHigh) = Win32.ddwordToDwords offset
+         #{poke OVERLAPPED, Offset} p offsetLow
+         #{poke OVERLAPPED, OffsetHigh} p offsetHigh
+  return fptr
 
 ------------------------------------------------------------------------
 -- Cancel pending I/O
@@ -149,11 +143,11 @@ discardOverlapped o = c_iocp_finish_overlapped o >>= freeStablePtr
 -- | CancelIo shouldn't block, but cancellation happens infrequently,
 -- so we might as well be on the safe side.
 foreign import WINDOWS_CCONV safe "windows.h CancelIoEx"
-    c_CancelIoEx :: HANDLE -> Overlapped -> IO BOOL
+    c_CancelIoEx :: HANDLE -> LPOVERLAPPED -> IO BOOL
 
 -- | Cancel all pending overlapped I/O for the given file that was initiated by
 -- the current OS thread.
-cancelIoEx :: HANDLE -> Overlapped -> IO ()
+cancelIoEx :: HANDLE -> LPOVERLAPPED -> IO ()
 cancelIoEx h o = failIfFalse_ "CancelIoEx" . c_CancelIoEx h $ o
 
 ------------------------------------------------------------------------
@@ -226,13 +220,8 @@ callQP qpfunc =
 ------------------------------------------------------------------------
 -- Miscellaneous
 
-type ULONG_PTR = #type ULONG_PTR
-
-takeStablePtr :: StablePtr a -> IO a
-takeStablePtr ptr = do
-    a <- deRefStablePtr ptr
-    freeStablePtr ptr
-    return a
+type ULONG_PTR  = #type ULONG_PTR
+type PULONG_PTR = Ptr ULONG_PTR
 
 throwWinErr :: String -> ErrCode -> IO a
 throwWinErr loc err = do
