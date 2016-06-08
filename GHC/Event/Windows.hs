@@ -133,7 +133,7 @@ associateHandle Manager{..} h =
 
 -- | Start an overlapped I/O operation, and wait for its completion.  If
 -- 'withOverlapped' is interrupted by an asynchronous exception, the operation
--- will be canceled using @CancelIo@.
+-- will be canceled using @CancelIoEx@.
 --
 -- 'withOverlapped' waits for a completion to arrive before returning or
 -- throwing an exception.  This means you can use functions like
