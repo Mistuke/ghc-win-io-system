@@ -8,8 +8,9 @@ import Data.Monoid
 import GHC.Event.Windows
 import GHC.Event.Windows.Thread
 import Control.Concurrent
-import Control.Monad        (forever, void)
-import System.IO hiding (hGetContents)
+import Control.Monad    (forever, void)
+import System.IO
+import System.IO.IOCP
 import Network.Winsock
 import Data.ByteString
 import qualified Data.ByteString.Char8 as B8
@@ -20,10 +21,10 @@ portNum = 8080
 
 client sock = do
   recvRequest ""
-  withFile "iocp.cabal" ReadMode $ \h -> do
-                fileContents <- hGetContents h
-                sendAll sock (header <> fileContents)
-                close sock
+  fileContents <- readFileIOCP "iocp.cabal"
+  sendAll sock (header <> fileContents)
+  close sock
+
  where
    header = "HTTP/1.0 200 OK\r\nConnection: Close\r\nContent-Length: 5\r\n\r\n"
    recvRequest r = do
@@ -41,6 +42,7 @@ acceptConnections listenSock = loop
         loop
 
 main = do
+  hSetBuffering stdout LineBuffering
   ensureIOManagerIsRunning
   sock <- socket NS.AF_INET NS.Stream NS.defaultProtocol
   addr <- NS.inet_addr "127.0.0.1"
