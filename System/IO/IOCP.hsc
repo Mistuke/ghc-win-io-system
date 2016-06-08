@@ -1,7 +1,7 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE ForeignFunctionInterface #-}
 
-module System.IO.IOCP (readFileIOCP)
+module System.IO.IOCP (openFileIOCP, readFileIOCP, closeFileIOCP)
     where
 
 #include <windows.h>
@@ -33,11 +33,11 @@ type LPSECURITY_ATTRIBUTES = LPVOID
 getManager :: IO Mgr.Manager
 getManager = Mgr.getSystemManager >>= maybe (fail "requires threaded RTS") return
 
-readFileIOCP :: FilePath -> IO ByteString
-readFileIOCP fp = do mgr <- getManager
+openFileIOCP :: FilePath -> IO HANDLE
+openFileIOCP fp = do mgr <- getManager
                      h <- createFile
                      associateHandle mgr h
-                     readFile mgr h
+                     return h
     where
       createFile =
           Win32.withTString fp $ \fp' ->
@@ -49,12 +49,14 @@ readFileIOCP fp = do mgr <- getManager
                                       #{const FILE_FLAG_OVERLAPPED}
                                       nullHANDLE
 
-      closeHandle h = failIfFalse_ "ClosHandle failed!" $
-                      c_CloseHandle h
 
+readFileIOCP :: HANDLE -> IO ByteString
+readFileIOCP h = do mgr <- getManager
+                    readFile mgr
+    where
       bufSize = 5120
 
-      readFile mgr h = createAndTrim (fromIntegral bufSize) $ \outBuf ->
+      readFile mgr = createAndTrim (fromIntegral bufSize) $ \outBuf ->
                      withOverlapped mgr h 0 (startCB outBuf) completionCB
           where
             startCB outBuf lpOverlapped = do
@@ -64,11 +66,12 @@ readFileIOCP fp = do mgr <- getManager
                    failIf_ (/= #{const ERROR_IO_PENDING}) "ReadFile failed" $
                            Win32.getLastError
 
-            completionCB err dwBytes = do
-              closeHandle h
-              case err of
-                0 -> return (fromIntegral dwBytes)
-                _ -> FFI.throwWinErr "readFile" err
+            completionCB err dwBytes
+                | err == 0  = return (fromIntegral dwBytes)
+                | otherwise = FFI.throwWinErr "readFile" err
+
+closeFileIOCP :: HANDLE -> IO ()
+closeFileIOCP h = failIfFalse_ "ClosHandle failed!" $ c_CloseHandle h
 
 foreign import WINDOWS_CCONV unsafe "windows.h CreateFileW"
     c_CreateFile :: LPCTSTR -> DWORD -> DWORD -> LPSECURITY_ATTRIBUTES

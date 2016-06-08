@@ -5,6 +5,7 @@ module Main where
 import Prelude hiding (log)
 
 import Data.Monoid
+import Control.Exception
 import GHC.Event.Windows
 import GHC.Event.Windows.Thread
 import Control.Concurrent
@@ -19,9 +20,9 @@ import qualified Network.Socket as NS
 portNum :: NS.PortNumber
 portNum = 8080
 
-client sock = do
+client sock h = do
   recvRequest ""
-  fileContents <- readFileIOCP "iocp.cabal"
+  fileContents <- readFileIOCP h
   sendAll sock (header <> fileContents)
   close sock
 
@@ -34,12 +35,13 @@ client sock = do
       then return ()
       else recvRequest t
 
-acceptConnections listenSock = loop
+acceptConnections listenSock =
+    bracket (openFileIOCP "iocp.cabal") closeFileIOCP loop
     where
-      loop = do
+      loop h = do
         sock <- accept listenSock
-        forkIO $ client sock
-        loop
+        forkIO $ client sock h
+        loop h
 
 main = do
   hSetBuffering stdout LineBuffering
