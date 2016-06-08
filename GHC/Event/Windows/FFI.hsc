@@ -114,6 +114,7 @@ overlappedIOStatus lpol = do
   -- TODO: Map NTSTATUS to ErrCode?
   -- See https://github.com/libuv/libuv/blob/b12624c13693c4d29ca84b3556eadc9e9c0936a4/src/win/winsock.c#L153
   else return status
+{-# INLINE overlappedIOStatus #-}
 
 foreign import WINDOWS_CCONV unsafe "windows.h PostQueuedCompletionStatus"
     c_PostQueuedCompletionStatus :: IOCP -> DWORD -> ULONG_PTR -> LPOVERLAPPED
