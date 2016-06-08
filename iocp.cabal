@@ -183,3 +183,15 @@ executable trivial
        buildable: True
     else
        buildable: False
+
+executable thread-delay
+    main-is: thread-delay.hs
+    hs-source-dirs: testing
+    build-depends: base, iocp, stm
+    ghc-options: -threaded -rtsopts
+
+executable thread-delay-baseline
+    main-is: thread-delay-baseline.hs
+    hs-source-dirs: testing
+    build-depends: base, stm
+    ghc-options: -threaded -rtsopts
