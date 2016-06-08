@@ -31,6 +31,7 @@ library
         GHC.Event.Windows.FFI
         GHC.Event.Windows.Thread
         Network.Winsock
+        System.IO.IOCP
 
     c-sources:
         cbits/Winsock.c
@@ -56,32 +57,32 @@ executable pong
     hs-source-dirs: testing
     build-depends: ansi-terminal, base, bytestring, iocp, network
     ghc-options: -threaded -rtsopts
+    if flag(all-tests)
+       buildable: True
+    else
+       buildable: False
 
 executable pong-baseline
     main-is: pong-baseline.hs
     hs-source-dirs: testing
     build-depends: ansi-terminal, base, bytestring, iocp, network
     ghc-options: -threaded -rtsopts
+    if flag(all-tests)
+       buildable: True
+    else
+       buildable: False
 
 executable file
     main-is: file.hs
     hs-source-dirs: testing
     build-depends: ansi-terminal, base, bytestring, iocp, network
     ghc-options: -threaded -rtsopts
-    if flag(all-tests)
-       buildable: True
-    else
-       buildable: False
 
 executable file-baseline
     main-is: file-baseline.hs
     hs-source-dirs: testing
     build-depends: ansi-terminal, base, bytestring, iocp, network
     ghc-options: -threaded -rtsopts
-    if flag(all-tests)
-       buildable: True
-    else
-       buildable: False
 
 executable clock
     main-is: clock.hs
@@ -128,6 +129,10 @@ executable recv-bench
     hs-source-dirs: testing
     build-depends: base, bytestring, criterion, iocp, network
     ghc-options: -threaded -rtsopts
+    if flag(all-tests)
+       buildable: True
+    else
+       buildable: False
 
 executable recv
     main-is: recv.hs
@@ -154,6 +159,10 @@ executable send
     hs-source-dirs: testing
     build-depends: base, bytestring, iocp, network
     ghc-options: -threaded -rtsopts
+    if flag(all-tests)
+       buildable: True
+    else
+       buildable: False
 
 executable send-recv
     main-is: send-recv.hs
