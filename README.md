@@ -1,5 +1,13 @@
-# haskell-iocp
+# Haskell I/O Manager
 
-Nursery for a GHC IO manager using Windows completion ports.
+Nursery for a GHC IO manager using Windows completion ports as a base.
 
-Fork of the implementation by Joseph Adams.
+When available RIO will be used as well to reduce overhead.
+
+This IO Manager is intended to handle:
+  - Locks
+  - File I/O
+  - Network I/O
+  - Console I/O
+
+This is based on work from Joseph Adams, Mikhail Glushenkov and Tamar Christina.
