@@ -1,6 +1,5 @@
 {-# LANGUAGE Trustworthy #-}
 {-# LANGUAGE BangPatterns, NoImplicitPrelude, RecordWildCards #-}
-{-# OPTIONS_GHC -Wno-name-shadowing #-}
 
 module GHC.Event.IntTable
     (
@@ -90,15 +89,15 @@ insertWith :: (a -> a -> a) -> Int -> a -> IntTable a -> IO (Maybe a)
 insertWith f k v inttable@(IntTable ref) = do
   it@IT{..} <- readIORef ref
   let idx = indexOf k it
-      go seen bkt@Bucket{..}
-        | bucketKey == k = do
-          let !v' = f v bucketValue
-              !next = seen <> bucketNext
+      go seen bkt@Bucket{}
+        | bucketKey bkt == k = do
+          let !v' = f v $ bucketValue bkt
+              !next = seen <> bucketNext bkt
               Empty        <> bs = bs
-              b@Bucket{..} <> bs = b { bucketNext = bucketNext <> bs }
+              b@Bucket{}   <> bs = b { bucketNext = bucketNext b <> bs }
           Arr.write tabArr idx (Bucket k v' next)
-          return (Just bucketValue)
-        | otherwise = go bkt { bucketNext = seen } bucketNext
+          return (Just $ bucketValue bkt)
+        | otherwise = go bkt { bucketNext = seen } (bucketNext bkt)
       go seen _ = withForeignPtr tabSize $ \ptr -> do
         size <- peek ptr
         if size + 1 >= Arr.size tabArr - (Arr.size tabArr `shiftR` 2)

@@ -1,0 +1,1 @@
+A Windows I/O manager for the Glasgow Haskell Compiler.

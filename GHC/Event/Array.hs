@@ -36,6 +36,11 @@ import GHC.ForeignPtr (mallocPlainForeignPtrBytes, newForeignPtr_)
 import GHC.Num (Num(..))
 import GHC.Real (fromIntegral)
 import GHC.Show (show)
+#if MIN_VERSION_base(4,9,0)
+import GHC.Err (errorWithoutStackTrace)
+#else
+errorWithoutStackTrace = error
+#endif
 
 #include "MachDeps.h"
 

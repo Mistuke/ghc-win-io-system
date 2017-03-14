@@ -9,5 +9,7 @@ This IO Manager is intended to handle:
   - File I/O
   - Network I/O
   - Console I/O
+  - Process and monitoring
+  - Events
 
 This is based on work from Joseph Adams, Mikhail Glushenkov and Tamar Christina.
