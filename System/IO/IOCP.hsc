@@ -5,16 +5,7 @@ module System.IO.IOCP (openFileIOCP, readFileIOCP, closeFileIOCP)
     where
 
 #include <windows.h>
-
-##ifdef mingw32_HOST_OS
-## if defined(i386_HOST_ARCH)
-##  define WINDOWS_CCONV stdcall
-## elif defined(x86_64_HOST_ARCH)
-##  define WINDOWS_CCONV ccall
-## else
-##  error Unknown mingw32 arch
-## endif
-##endif
+##include "windows_cconv.h"
 
 import Prelude hiding (readFile)
 import Control.Monad (when)
@@ -23,7 +14,7 @@ import Data.ByteString.Internal (createAndTrim)
 import GHC.Windows
 import GHC.Event.Windows (LPOVERLAPPED, associateHandle, withOverlapped)
 import Foreign.Ptr
-import System.Win32.Types (LPCTSTR, LPVOID, LPDWORD, nullHANDLE, nullPtr)
+import System.Win32.Types (LPCTSTR, LPVOID, LPDWORD, nullHANDLE)
 import qualified System.Win32.Types as Win32
 import qualified GHC.Event.Windows as Mgr
 import qualified GHC.Event.Windows.FFI as FFI

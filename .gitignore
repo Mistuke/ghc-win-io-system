@@ -8,3 +8,5 @@ cabal.sandbox.config
 /dist-boot
 *.o
 *.hi
+.vscode
+debug.log

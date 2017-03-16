@@ -15,6 +15,7 @@ build-type:         Simple
 cabal-version:      >=1.8
 
 extra-source-files:
+   include/alignment.h changelog.md
 
 source-repository head
     type:       git
@@ -39,9 +40,12 @@ library
         cbits/Winsock.c
 
     build-tools: hsc2hs
+    extensions:    ForeignFunctionInterface, CPP
 
-    ghc-options: -Wall -fwarn-tabs -fno-warn-missing-signatures
-    cc-options: -Wall
+    ghc-options:
+        -Wall -fwarn-tabs -fno-warn-missing-signatures
+        -fno-warn-name-shadowing
+    cc-options: -Wall -fno-strict-aliasing
 
     build-depends   : base >= 4 && < 5
                     , ghc-prim
@@ -49,6 +53,11 @@ library
                     , containers
                     , Win32
                     , network
+
+    include-dirs:     include
+    includes:         "windows_cconv.h", "alignment.h"
+    install-includes:
+
 
 flag all-tests
     Description: Enable all test exes
