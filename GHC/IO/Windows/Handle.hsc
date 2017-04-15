@@ -54,7 +54,7 @@ import GHC.IO.BufferedIO
 import qualified GHC.IO.Device
 import GHC.IO.Device (SeekMode(..), IODeviceType(..))
 import GHC.Event.Windows (LPOVERLAPPED, associateHandle', withOverlapped,
-                          withOverlapped_, IOResult(..))
+                          IOResult(..))
 import Foreign.Ptr
 import Foreign.Marshal.Array (allocaArray)
 import qualified GHC.Event.Windows as Mgr
@@ -164,7 +164,8 @@ type LPSECURITY_ATTRIBUTES = LPVOID
 -- been created with FILE_FLAG_OVERLAPPED not set.
 hwndRead :: Handle -> Ptr Word8 -> Int -> IO Int
 hwndRead hwnd ptr bytes
-  = do withOverlapped (getHandle hwnd) 0 (startCB ptr) completionCB
+  = do fmap fromIntegral $ Mgr.withException "hwndRead" $
+          withOverlapped "hwndRead" (getHandle hwnd) 0 (startCB ptr) completionCB
   where
     startCB outBuf lpOverlapped = do
       ret <- c_ReadFile (getHandle hwnd) (castPtr outBuf) (fromIntegral bytes)
@@ -172,19 +173,20 @@ hwndRead hwnd ptr bytes
       when (not ret) $
             failIf_ (/= #{const ERROR_IO_PENDING}) "ReadFile failed" $
                     Win32.getLastError
+      return Nothing
 
     completionCB err dwBytes
-        | err == 0  = return (fromIntegral dwBytes)
-        | otherwise = FFI.throwWinErr "readFileRaw" err
+        | err == 0  = Mgr.ioSuccess $ fromIntegral dwBytes
+        | otherwise = Mgr.ioFailed err
 
 -- There's no non-blocking file I/O on Windows I think..
 -- But sockets etc should be possible.
 -- Revisit this when implementing sockets and pipes.
 hwndReadNonBlocking :: Handle -> Ptr Word8 -> Int -> IO (Maybe Int)
 hwndReadNonBlocking hwnd ptr bytes
-  = do val <- withOverlapped_ "hwndReadNonBlocking" (getHandle hwnd) 0
+  = do val <- withOverlapped "hwndReadNonBlocking" (getHandle hwnd) 0
                               (startCB ptr) completionCB
-       return $ Just $ ioValue val
+       return $ Just $ fromIntegral $ ioValue val
   where
     startCB outBuf lpOverlapped = do
       ret <- c_ReadFile (getHandle hwnd) (castPtr outBuf) (fromIntegral bytes)
@@ -197,8 +199,8 @@ hwndReadNonBlocking hwnd ptr bytes
         else return (Just err)
 
     completionCB err dwBytes
-        | err == 0  = return $ IOSuccess $ fromIntegral dwBytes
-        | otherwise = return $ IOFailed $ Just $ fromIntegral err
+        | err == 0  = Mgr.ioSuccess $ fromIntegral dwBytes
+        | otherwise = Mgr.ioFailed err
 
 hwndWrite :: Handle -> Ptr Word8 -> Int -> IO ()
 hwndWrite handle ptr bytes = undefined

@@ -12,12 +12,12 @@ import Control.Monad (when)
 import Data.ByteString hiding (readFile)
 import Data.ByteString.Internal (createAndTrim)
 import GHC.Windows
-import GHC.Event.Windows (LPOVERLAPPED, associateHandle, withOverlappedThreaded)
+import GHC.Event.Windows (LPOVERLAPPED, associateHandle, withOverlappedEx,
+                          withException, ioSuccess, ioFailed)
 import Foreign.Ptr
 import System.Win32.Types (LPCTSTR, LPVOID, LPDWORD, nullHANDLE)
 import qualified System.Win32.Types as Win32
 import qualified GHC.Event.Windows as Mgr
-import qualified GHC.Event.Windows.FFI as FFI
 
 type LPSECURITY_ATTRIBUTES = LPVOID
 
@@ -48,7 +48,8 @@ readFileIOCP h = do mgr <- getManager
       bufSize = 5120
 
       readFile mgr = createAndTrim (fromIntegral bufSize) $ \outBuf ->
-                     withOverlappedThreaded mgr h 0 (startCB outBuf) completionCB
+                       fmap fromIntegral $ withException "readFileIOCP" $
+                         withOverlappedEx (Just mgr) "readFileIOCP" h 0 (startCB outBuf) completionCB
           where
             startCB outBuf lpOverlapped = do
               ret <-
@@ -56,10 +57,11 @@ readFileIOCP h = do mgr <- getManager
               when (not ret) $
                    failIf_ (/= #{const ERROR_IO_PENDING}) "ReadFile failed" $
                            Win32.getLastError
+              return Nothing
 
             completionCB err dwBytes
-                | err == 0  = return (fromIntegral dwBytes)
-                | otherwise = FFI.throwWinErr "readFile" err
+                | err == 0  = ioSuccess (fromIntegral dwBytes)
+                | otherwise = ioFailed err
 
 closeFileIOCP :: HANDLE -> IO ()
 closeFileIOCP h = failIfFalse_ "ClosHandle failed!" $ c_CloseHandle h

@@ -13,9 +13,7 @@ module GHC.Event.Windows (
     associateHandle,
     associateHandle',
     withOverlapped,
-    withOverlapped_,
-    withOverlappedThreaded,
-    withOverlappedThreaded_,
+    withOverlappedEx,
     StartCallback,
     CompletionCallback,
     LPOVERLAPPED,
@@ -27,6 +25,11 @@ module GHC.Event.Windows (
     registerTimeout,
     updateTimeout,
     unregisterTimeout,
+
+    -- * Utilities
+    withException,
+    ioSuccess,
+    ioFailed,
 
     -- * IO Result type
     IOResult(..)
@@ -156,38 +159,6 @@ associateHandle Manager{..} h =
 -- 'withOverlapped' waits for a completion to arrive before returning or
 -- throwing an exception.  This means you can use functions like
 -- 'Foreign.Marshal.Alloc.alloca' to allocate buffers for the operation.
-withOverlappedThreaded :: Manager
-                       -> HANDLE
-                       -> Word64 -- ^ Value to use for the @OVERLAPPED@
-                                   --   structure's Offset/OffsetHigh members.
-                       -> StartCallback ()
-                       -> CompletionCallback a
-                       -> IO a
-withOverlappedThreaded mgr h offset startCB completionCB = do
-    signal <- newEmptyMVar
-    let signalReturn a = do _ <- tryPutMVar signal $ return a
-                            return ()
-        signalThrow ex = do _ <- tryPutMVar signal $ throwIO
-                                 (ex :: SomeException)
-                            return ()
-    mask_ $ do
-        let completionCB' e b =
-                (completionCB e b >>= signalReturn) `E.catch` signalThrow
-        fptr <- FFI.allocOverlapped offset
-        let lpol = unsafeForeignPtrToPtr fptr
-        _ <- withMVar (callbackTableVar mgr lpol) $ \tbl ->
-             IT.insertWith (flip const) (lpoverlappedToInt lpol)
-               (CompletionData fptr completionCB') tbl
-
-        startCB lpol `E.catch` \ex -> do
-              _ <- withMVar (callbackTableVar mgr lpol) $ \tbl ->
-                   IT.delete (lpoverlappedToInt lpol) tbl
-              signalThrow ex
-
-        let cancel = uninterruptibleMask_ $ FFI.cancelIoEx h lpol
-        join (takeMVar signal `onException` cancel)
-
--- | Same as withOverlapped except is safe and doesn't use exceptions.
 withOverlappedThreaded_ :: Manager
                         -> String
                         -> HANDLE
@@ -237,7 +208,7 @@ withOverlappedNonThreaded_ :: String
                            -> StartCallback (Maybe Int)
                            -> CompletionCallback (IOResult a)
                            -> IO (IOResult a)
-withOverlappedNonThreaded_ fname h offset startCB completionCB = do
+withOverlappedNonThreaded_ _fname h offset startCB completionCB = do
     let signalReturn a = return $ IOSuccess a
         signalThrow ex = return $ IOFailed ex
     mask_ $ do
@@ -259,30 +230,49 @@ withOverlappedNonThreaded_ fname h offset startCB completionCB = do
             Just err -> do
                 signalThrow (Just err)
 
-withOverlapped :: HANDLE
+-- Safe version of function
+withOverlapped :: String
+               -> HANDLE
                -> Word64 -- ^ Value to use for the @OVERLAPPED@
-                           --   structure's Offset/OffsetHigh members.
-               -> StartCallback ()
-               -> CompletionCallback a
-               -> IO a
-withOverlapped h offset startCB completionCB
-  = do mngr <- getSystemManager
-       case mngr of
-         Nothing    -> undefined
-         Just mngr' -> withOverlappedThreaded mngr' h offset startCB completionCB
-
-withOverlapped_ :: String
-                -> HANDLE
-                -> Word64 -- ^ Value to use for the @OVERLAPPED@
-                          --   structure's Offset/OffsetHigh members.
-                -> StartCallback (Maybe Int)
-                -> CompletionCallback (IOResult a)
-                -> IO (IOResult a)
-withOverlapped_ fname h offset startCB completionCB
+                         --   structure's Offset/OffsetHigh members.
+               -> StartCallback (Maybe Int)
+               -> CompletionCallback (IOResult a)
+               -> IO (IOResult a)
+withOverlapped fname h offset startCB completionCB
   = do mngr <- getSystemManager
        case mngr of
          Nothing    -> withOverlappedNonThreaded_    fname h offset startCB completionCB
          Just mngr' -> withOverlappedThreaded_ mngr' fname h offset startCB completionCB
+
+withOverlappedEx :: Maybe Manager
+                 -> String
+                 -> HANDLE
+                 -> Word64 -- ^ Value to use for the @OVERLAPPED@
+                           --   structure's Offset/OffsetHigh members.
+                 -> StartCallback (Maybe Int)
+                 -> CompletionCallback (IOResult a)
+                 -> IO (IOResult a)
+withOverlappedEx mngr fname h offset startCB completionCB
+  = do case mngr of
+         Nothing    -> withOverlappedNonThreaded_    fname h offset startCB completionCB
+         Just mngr' -> withOverlappedThreaded_ mngr' fname h offset startCB completionCB
+
+------------------------------------------------------------------------
+-- I/O Utilities
+
+withException :: String -> IO (IOResult a) -> IO a
+withException name fn
+ = do res <- fn
+      case res of
+       IOSuccess a         -> return a
+       IOFailed (Just err) -> FFI.throwWinErr name $ fromIntegral err
+       IOFailed Nothing    -> FFI.throwWinErr name 0
+
+ioSuccess :: a -> IO (IOResult a)
+ioSuccess = return . IOSuccess
+
+ioFailed :: Integral a => a -> IO (IOResult a)
+ioFailed = return . IOFailed . Just . fromIntegral
 
 ------------------------------------------------------------------------
 -- Timeouts

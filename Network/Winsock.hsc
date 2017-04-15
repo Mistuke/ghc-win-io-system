@@ -73,8 +73,12 @@ withOverlapped :: SOCKET -> Word64
                -> Mgr.CompletionCallback a
                -> IO a
 withOverlapped h offset startCB completionCB = do
-    mgr <- getManager
-    Mgr.withOverlappedThreaded mgr (castSOCKETToHANDLE h) offset startCB completionCB
+    mgr <- Mgr.getSystemManager
+    let name = "Winsock.withOverlapped"
+    let startCB' lp = startCB lp >> return Nothing
+    let completionCB' a b = completionCB a b >>= Mgr.ioSuccess
+    Mgr.withException name $
+      Mgr.withOverlappedEx mgr name (castSOCKETToHANDLE h) offset startCB' completionCB'
 
 listen :: Socket -> IO ()
 listen (Socket sock) = do
