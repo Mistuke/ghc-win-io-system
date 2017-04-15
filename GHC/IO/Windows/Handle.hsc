@@ -68,7 +68,7 @@ import qualified System.Win32.Types as Win32
 -- -----------------------------------------------------------------------------
 -- The Windows IO device
 
-newtype Handle = Handle { handle :: HANDLE }
+newtype Handle = Handle { getHandle :: HANDLE }
 
 -- | Create a new Handle object
 mkHandle :: HANDLE -> Handle
@@ -76,7 +76,7 @@ mkHandle = Handle
 
 -- | @since 4.11.0.0
 instance Show Handle where
-  show = show . handle
+  show = show . getHandle
 
 -- | @since 4.11.0.0
 instance GHC.IO.Device.RawIO Handle where
@@ -171,10 +171,10 @@ getManager = Mgr.getSystemManager >>= maybe (fail "requires threaded RTS") retur
 hwndRead :: Handle -> Ptr Word8 -> Int -> IO Int
 hwndRead hwnd ptr bytes
   = do mgr <- getManager
-       withOverlapped mgr (handle hwnd) 0 (startCB ptr) completionCB
+       withOverlapped mgr (getHandle hwnd) 0 (startCB ptr) completionCB
   where
     startCB outBuf lpOverlapped = do
-      ret <- c_ReadFile (handle hwnd) (castPtr outBuf) (fromIntegral bytes)
+      ret <- c_ReadFile (getHandle hwnd) (castPtr outBuf) (fromIntegral bytes)
                         nullPtr lpOverlapped
       when (not ret) $
             failIf_ (/= #{const ERROR_IO_PENDING}) "ReadFile failed" $
@@ -190,12 +190,12 @@ hwndRead hwnd ptr bytes
 hwndReadNonBlocking :: Handle -> Ptr Word8 -> Int -> IO (Maybe Int)
 hwndReadNonBlocking hwnd ptr bytes
   = do mgr <- getManager
-       val <- withOverlapped_ mgr "hwndReadNonBlocking" (handle hwnd) 0
+       val <- withOverlapped_ mgr "hwndReadNonBlocking" (getHandle hwnd) 0
                               (startCB ptr) completionCB
        return $ Just $ ioValue val
   where
     startCB outBuf lpOverlapped = do
-      ret <- c_ReadFile (handle hwnd) (castPtr outBuf) (fromIntegral bytes)
+      ret <- c_ReadFile (getHandle hwnd) (castPtr outBuf) (fromIntegral bytes)
                         nullPtr lpOverlapped
       err <- fmap fromIntegral Win32.getLastError
       if   not ret
@@ -249,4 +249,4 @@ openFile fp = do mgr <- getManager
 -- Operations on file descriptors
 
 closeFile :: Handle -> IO ()
-closeFile h = failIfFalse_ "ClosHandle failed!" $ c_CloseHandle $ handle h
+closeFile = failIfFalse_ "ClosHandle failed!" . c_CloseHandle . getHandle
