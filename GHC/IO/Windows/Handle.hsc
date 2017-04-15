@@ -35,6 +35,7 @@ module GHC.IO.Windows.Handle
 
 import Prelude hiding (readFile)
 import Control.Monad (when)
+import Data.Bits ((.|.))
 import Data.ByteString hiding (readFile)
 import qualified Data.ByteString as BS
 import Data.ByteString.Internal (createAndTrim)
@@ -102,6 +103,8 @@ instance GHC.IO.Device.IODevice Handle where
   --dup2          = dup2
 
 -- Default sequential read buffer size.
+-- for Windows 8k seems to be the optimal
+-- buffer size.
 dEFAULT_BUFFER_SIZE :: Int
 dEFAULT_BUFFER_SIZE = 8192
 
@@ -239,7 +242,7 @@ openFile fp = do mgr <- getManager
                                       #{const FILE_SHARE_READ}
                                       nullPtr
                                       #{const OPEN_EXISTING}
-                                      #{const FILE_FLAG_OVERLAPPED}
+                                      (#{const FILE_FLAG_OVERLAPPED} .|. #{const FILE_FLAG_SEQUENTIAL_SCAN })
                                       nullHANDLE
 
 -- -----------------------------------------------------------------------------
