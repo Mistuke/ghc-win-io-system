@@ -12,7 +12,7 @@ import Control.Monad (when)
 import Data.ByteString hiding (readFile)
 import Data.ByteString.Internal (createAndTrim)
 import GHC.Windows
-import GHC.Event.Windows (LPOVERLAPPED, associateHandle, withOverlapped)
+import GHC.Event.Windows (LPOVERLAPPED, associateHandle, withOverlappedThreaded)
 import Foreign.Ptr
 import System.Win32.Types (LPCTSTR, LPVOID, LPDWORD, nullHANDLE)
 import qualified System.Win32.Types as Win32
@@ -48,7 +48,7 @@ readFileIOCP h = do mgr <- getManager
       bufSize = 5120
 
       readFile mgr = createAndTrim (fromIntegral bufSize) $ \outBuf ->
-                     withOverlapped mgr h 0 (startCB outBuf) completionCB
+                     withOverlappedThreaded mgr h 0 (startCB outBuf) completionCB
           where
             startCB outBuf lpOverlapped = do
               ret <-

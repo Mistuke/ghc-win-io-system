@@ -74,7 +74,7 @@ withOverlapped :: SOCKET -> Word64
                -> IO a
 withOverlapped h offset startCB completionCB = do
     mgr <- getManager
-    Mgr.withOverlapped mgr (castSOCKETToHANDLE h) offset startCB completionCB
+    Mgr.withOverlappedThreaded mgr (castSOCKETToHANDLE h) offset startCB completionCB
 
 listen :: Socket -> IO ()
 listen (Socket sock) = do

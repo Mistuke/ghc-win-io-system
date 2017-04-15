@@ -53,7 +53,7 @@ import GHC.IO.Buffer
 import GHC.IO.BufferedIO
 import qualified GHC.IO.Device
 import GHC.IO.Device (SeekMode(..), IODeviceType(..))
-import GHC.Event.Windows (LPOVERLAPPED, associateHandle, withOverlapped,
+import GHC.Event.Windows (LPOVERLAPPED, associateHandle', withOverlapped,
                           withOverlapped_, IOResult(..))
 import Foreign.Ptr
 import Foreign.Marshal.Array (allocaArray)
@@ -158,20 +158,13 @@ foreign import WINDOWS_CCONV unsafe "windows.h ReadFile"
 type LPSECURITY_ATTRIBUTES = LPVOID
 
 -- -----------------------------------------------------------------------------
--- I/O Manager
-
-getManager :: IO Mgr.Manager
-getManager = Mgr.getSystemManager >>= maybe (fail "requires threaded RTS") return
-
--- -----------------------------------------------------------------------------
 -- Reading and Writing
 
 -- For this to actually block, the file handle must have
 -- been created with FILE_FLAG_OVERLAPPED not set.
 hwndRead :: Handle -> Ptr Word8 -> Int -> IO Int
 hwndRead hwnd ptr bytes
-  = do mgr <- getManager
-       withOverlapped mgr (getHandle hwnd) 0 (startCB ptr) completionCB
+  = do withOverlapped (getHandle hwnd) 0 (startCB ptr) completionCB
   where
     startCB outBuf lpOverlapped = do
       ret <- c_ReadFile (getHandle hwnd) (castPtr outBuf) (fromIntegral bytes)
@@ -184,13 +177,12 @@ hwndRead hwnd ptr bytes
         | err == 0  = return (fromIntegral dwBytes)
         | otherwise = FFI.throwWinErr "readFileRaw" err
 
--- For this to actually block, the file handle must have
--- been created with FILE_FLAG_OVERLAPPED set.
--- TODO: create non-rts version.
+-- There's no non-blocking file I/O on Windows I think..
+-- But sockets etc should be possible.
+-- Revisit this when implementing sockets and pipes.
 hwndReadNonBlocking :: Handle -> Ptr Word8 -> Int -> IO (Maybe Int)
 hwndReadNonBlocking hwnd ptr bytes
-  = do mgr <- getManager
-       val <- withOverlapped_ mgr "hwndReadNonBlocking" (getHandle hwnd) 0
+  = do val <- withOverlapped_ "hwndReadNonBlocking" (getHandle hwnd) 0
                               (startCB ptr) completionCB
        return $ Just $ ioValue val
   where
@@ -230,9 +222,8 @@ test2 = do hwnd <- openFile "r:\\hello.txt"
            return bytes
 
 openFile :: FilePath -> IO Handle
-openFile fp = do mgr <- getManager
-                 h <- createFile
-                 associateHandle mgr h
+openFile fp = do h <- createFile
+                 associateHandle' h
                  return $ mkHandle h
     where
       createFile =

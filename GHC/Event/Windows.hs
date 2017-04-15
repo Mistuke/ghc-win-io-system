@@ -11,8 +11,11 @@ module GHC.Event.Windows (
 
     -- * Overlapped I/O
     associateHandle,
+    associateHandle',
     withOverlapped,
     withOverlapped_,
+    withOverlappedThreaded,
+    withOverlappedThreaded_,
     StartCallback,
     CompletionCallback,
     LPOVERLAPPED,
@@ -135,6 +138,11 @@ type CompletionCallback a = ErrCode   -- ^ 0 indicates success
                           -> DWORD     -- ^ Number of bytes transferred
                           -> IO a
 
+associateHandle' :: HANDLE -> IO ()
+associateHandle' hwnd
+  = do mngr <- getSystemManager
+       maybe (return ()) (flip associateHandle hwnd) mngr
+
 -- | Associate a 'HANDLE' with the I/O manager's completion port.  This must be
 -- done before using the handle with 'withOverlapped'.
 associateHandle :: Manager -> HANDLE -> IO ()
@@ -148,14 +156,14 @@ associateHandle Manager{..} h =
 -- 'withOverlapped' waits for a completion to arrive before returning or
 -- throwing an exception.  This means you can use functions like
 -- 'Foreign.Marshal.Alloc.alloca' to allocate buffers for the operation.
-withOverlapped :: Manager
-               -> HANDLE
-               -> Word64 -- ^ Value to use for the @OVERLAPPED@
-                         --   structure's Offset/OffsetHigh members.
-               -> StartCallback ()
-               -> CompletionCallback a
-               -> IO a
-withOverlapped mgr h offset startCB completionCB = do
+withOverlappedThreaded :: Manager
+                       -> HANDLE
+                       -> Word64 -- ^ Value to use for the @OVERLAPPED@
+                                   --   structure's Offset/OffsetHigh members.
+                       -> StartCallback ()
+                       -> CompletionCallback a
+                       -> IO a
+withOverlappedThreaded mgr h offset startCB completionCB = do
     signal <- newEmptyMVar
     let signalReturn a = do _ <- tryPutMVar signal $ return a
                             return ()
@@ -180,15 +188,15 @@ withOverlapped mgr h offset startCB completionCB = do
         join (takeMVar signal `onException` cancel)
 
 -- | Same as withOverlapped except is safe and doesn't use exceptions.
-withOverlapped_ :: Manager
-                -> String
-                -> HANDLE
-                -> Word64 -- ^ Value to use for the @OVERLAPPED@
-                          --   structure's Offset/OffsetHigh members.
-                -> StartCallback (Maybe Int)
-                -> CompletionCallback (IOResult a)
-                -> IO (IOResult a)
-withOverlapped_ mgr fname h offset startCB completionCB = do
+withOverlappedThreaded_ :: Manager
+                        -> String
+                        -> HANDLE
+                        -> Word64 -- ^ Value to use for the @OVERLAPPED@
+                                  --   structure's Offset/OffsetHigh members.
+                        -> StartCallback (Maybe Int)
+                        -> CompletionCallback (IOResult a)
+                        -> IO (IOResult a)
+withOverlappedThreaded_ mgr fname h offset startCB completionCB = do
     signal <- newEmptyMVar :: IO (MVar (IOResult a))
     let signalReturn a = tryPutMVar signal (IOSuccess a) >> return ()
         signalThrow ex = tryPutMVar signal (IOFailed ex) >> return ()
@@ -217,6 +225,31 @@ withOverlapped_ mgr fname h offset startCB completionCB = do
                           IOFailed err -> FFI.throwWinErr fname (maybe 0 fromIntegral err)
                           _            -> return res
         runner
+
+withOverlapped :: HANDLE
+               -> Word64 -- ^ Value to use for the @OVERLAPPED@
+                           --   structure's Offset/OffsetHigh members.
+               -> StartCallback ()
+               -> CompletionCallback a
+               -> IO a
+withOverlapped h offset startCB completionCB
+  = do mngr <- getSystemManager
+       case mngr of
+         Nothing    -> undefined
+         Just mngr' -> withOverlappedThreaded mngr' h offset startCB completionCB
+
+withOverlapped_ :: String
+                -> HANDLE
+                -> Word64 -- ^ Value to use for the @OVERLAPPED@
+                          --   structure's Offset/OffsetHigh members.
+                -> StartCallback (Maybe Int)
+                -> CompletionCallback (IOResult a)
+                -> IO (IOResult a)
+withOverlapped_ fname h offset startCB completionCB
+  = do mngr <- getSystemManager
+       case mngr of
+         Nothing    -> undefined
+         Just mngr' -> withOverlappedThreaded_ mngr' fname h offset startCB completionCB
 
 ------------------------------------------------------------------------
 -- Timeouts
