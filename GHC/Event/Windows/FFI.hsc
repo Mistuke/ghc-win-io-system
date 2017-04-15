@@ -13,6 +13,7 @@ module GHC.Event.Windows.FFI (
     associateHandleWithIOCP,
     getQueuedCompletionStatusEx,
     postQueuedCompletionStatus,
+    getOverlappedResult,
 
     -- * Overlapped
     OVERLAPPED,
@@ -87,6 +88,19 @@ associateHandleWithIOCP :: IOCP -> HANDLE -> CompletionKey -> IO ()
 associateHandleWithIOCP iocp handle completionKey =
     failIf_ (/= iocp) "associateHandleWithIOCP" $
         c_CreateIoCompletionPort handle iocp completionKey 0
+
+foreign import WINDOWS_CCONV safe "windows.h GetOverlappedResult"
+    c_GetOverlappedResult :: HANDLE -> LPOVERLAPPED -> Ptr DWORD -> BOOL
+                          -> IO BOOL
+
+-- | Get the result of a single overlap operation without the IO manager
+getOverlappedResult :: HANDLE -> Ptr OVERLAPPED -> BOOL -> IO (Maybe DWORD)
+getOverlappedResult handle lp block
+  = alloca $ \bytes ->
+        do res <- c_GetOverlappedResult handle lp bytes block
+           if res
+              then fmap Just $ peek bytes
+              else return Nothing
 
 foreign import WINDOWS_CCONV safe "windows.h GetQueuedCompletionStatusEx"
     c_GetQueuedCompletionStatusEx :: IOCP -> LPOVERLAPPED_ENTRY -> Word32

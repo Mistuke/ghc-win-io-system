@@ -226,6 +226,39 @@ withOverlappedThreaded_ mgr fname h offset startCB completionCB = do
                           _            -> return res
         runner
 
+-- This will block the current haskell thread
+-- but will allow you to cancel the operation from
+-- another haskell thread since they are on the same
+-- OS thread.
+withOverlappedNonThreaded_ :: String
+                           -> HANDLE
+                           -> Word64 -- ^ Value to use for the @OVERLAPPED@
+                                     --   structure's Offset/OffsetHigh members.
+                           -> StartCallback (Maybe Int)
+                           -> CompletionCallback (IOResult a)
+                           -> IO (IOResult a)
+withOverlappedNonThreaded_ fname h offset startCB completionCB = do
+    let signalReturn a = return $ IOSuccess a
+        signalThrow ex = return $ IOFailed ex
+    mask_ $ do
+        let completionCB' e b = completionCB e b >>= \result ->
+                                  case result of
+                                    IOSuccess val -> signalReturn val
+                                    IOFailed  err -> signalThrow err
+        fptr <- FFI.allocOverlapped offset
+        let lpol = unsafeForeignPtrToPtr fptr
+
+        startCB lpol `onException` (Just `fmap` Win32.getLastError) >>= \result ->
+          case result of
+            Nothing -> do
+                bytes <- FFI.getOverlappedResult h lpol True
+                case bytes of
+                  Just num_bytes -> completionCB' 0 num_bytes
+                  Nothing        -> do err <- FFI.overlappedIOStatus lpol
+                                       completionCB' err 0
+            Just err -> do
+                signalThrow (Just err)
+
 withOverlapped :: HANDLE
                -> Word64 -- ^ Value to use for the @OVERLAPPED@
                            --   structure's Offset/OffsetHigh members.
@@ -248,7 +281,7 @@ withOverlapped_ :: String
 withOverlapped_ fname h offset startCB completionCB
   = do mngr <- getSystemManager
        case mngr of
-         Nothing    -> undefined
+         Nothing    -> withOverlappedNonThreaded_    fname h offset startCB completionCB
          Just mngr' -> withOverlappedThreaded_ mngr' fname h offset startCB completionCB
 
 ------------------------------------------------------------------------
