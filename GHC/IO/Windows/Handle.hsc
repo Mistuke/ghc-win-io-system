@@ -22,7 +22,8 @@
 module GHC.IO.Windows.Handle
  ( -- * Basic Types
    Handle(..),
-
+   test,
+   test2,
    -- * Standard Handles
    stdin,
    stdout,
@@ -31,6 +32,13 @@ module GHC.IO.Windows.Handle
 
 #include <windows.h>
 ##include "windows_cconv.h"
+
+import Prelude hiding (readFile)
+import Control.Monad (when)
+import Data.ByteString hiding (readFile)
+import qualified Data.ByteString as BS
+import Data.ByteString.Internal (createAndTrim)
+import Data.Word (Word8)
 
 import GHC.Base
 import GHC.Num
@@ -44,13 +52,17 @@ import GHC.IO.Buffer
 import GHC.IO.BufferedIO
 import qualified GHC.IO.Device
 import GHC.IO.Device (SeekMode(..), IODeviceType(..))
-import GHC.Event.Windows (LPOVERLAPPED, associateHandle, withOverlapped)
+import GHC.Event.Windows (LPOVERLAPPED, associateHandle, withOverlapped,
+                          withOverlapped_, IOResult(..))
 import Foreign.Ptr
+import Foreign.Marshal.Array (allocaArray)
+import qualified GHC.Event.Windows as Mgr
+import qualified GHC.Event.Windows.FFI as FFI
 
-import System.Win32.Types
-
-c_DEBUG_DUMP :: Bool
-c_DEBUG_DUMP = False
+import System.Win32.Types (LPCTSTR, LPVOID, LPDWORD, DWORD, HANDLE, BOOL,
+                           nullHANDLE, failIf, iNVALID_HANDLE_VALUE,
+                           failIfFalse_, failIf_)
+import qualified System.Win32.Types as Win32
 
 -- -----------------------------------------------------------------------------
 -- The Windows IO device
@@ -67,10 +79,10 @@ instance Show Handle where
 
 -- | @since 4.11.0.0
 instance GHC.IO.Device.RawIO Handle where
-  --read             = fdRead
-  --readNonBlocking  = fdReadNonBlocking
-  --write            = fdWrite
-  --writeNonBlocking = fdWriteNonBlocking
+  read             = hwndRead
+  readNonBlocking  = hwndReadNonBlocking
+  write            = hwndWrite
+  writeNonBlocking = hwndWriteNonBlocking
 
 -- | @since 4.11.0.0
 instance GHC.IO.Device.IODevice Handle where
@@ -94,27 +106,13 @@ dEFAULT_BUFFER_SIZE :: Int
 dEFAULT_BUFFER_SIZE = 8192
 
 -- | @since 4.11.0.0
+-- See libraries/base/GHC/IO/BufferedIO.hs
 instance BufferedIO Handle where
   newBuffer _dev state = newByteBuffer dEFAULT_BUFFER_SIZE state
-  fillReadBuffer    hwnd buf = readBuf' hwnd buf
-  fillReadBuffer0   hwnd buf = readBufNonBlocking hwnd buf
-  flushWriteBuffer  hwnd buf = writeBuf' hwnd buf
-  flushWriteBuffer0 hwnd buf = writeBufNonBlocking hwnd buf
-
-readBuf' :: Handle -> Buffer Word8 -> IO (Int, Buffer Word8)
-readBuf' hwnd buf = do
-  when c_DEBUG_DUMP $
-      puts ("readBuf fd=" ++ show fd ++ " " ++ summaryBuffer buf ++ "\n")
-  (r,buf') <- readBuf fd buf
-  when c_DEBUG_DUMP $
-      puts ("after: " ++ summaryBuffer buf' ++ "\n")
-  return (r,buf')
-
-writeBuf' :: Handle -> Buffer Word8 -> IO (Buffer Word8)
-writeBuf' hwnd buf = do
-  when c_DEBUG_DUMP $
-      puts ("writeBuf fd=" ++ show fd ++ " " ++ summaryBuffer buf ++ "\n")
-  writeBuf hwnd buf
+  fillReadBuffer       = readBuf
+  fillReadBuffer0      = readBufNonBlocking
+  flushWriteBuffer     = writeBuf
+  flushWriteBuffer0    = writeBufNonBlocking
 
 -- -----------------------------------------------------------------------------
 -- Standard I/O handles
@@ -163,13 +161,76 @@ getManager :: IO Mgr.Manager
 getManager = Mgr.getSystemManager >>= maybe (fail "requires threaded RTS") return
 
 -- -----------------------------------------------------------------------------
+-- Reading and Writing
+
+-- For this to actually block, the file handle must have
+-- been created with FILE_FLAG_OVERLAPPED not set.
+hwndRead :: Handle -> Ptr Word8 -> Int -> IO Int
+hwndRead hwnd ptr bytes
+  = do mgr <- getManager
+       withOverlapped mgr (handle hwnd) 0 (startCB ptr) completionCB
+  where
+    startCB outBuf lpOverlapped = do
+      ret <- c_ReadFile (handle hwnd) (castPtr outBuf) (fromIntegral bytes)
+                        nullPtr lpOverlapped
+      when (not ret) $
+            failIf_ (/= #{const ERROR_IO_PENDING}) "ReadFile failed" $
+                    Win32.getLastError
+
+    completionCB err dwBytes
+        | err == 0  = return (fromIntegral dwBytes)
+        | otherwise = FFI.throwWinErr "readFileRaw" err
+
+-- For this to actually block, the file handle must have
+-- been created with FILE_FLAG_OVERLAPPED set.
+-- TODO: create non-rts version.
+hwndReadNonBlocking :: Handle -> Ptr Word8 -> Int -> IO (Maybe Int)
+hwndReadNonBlocking hwnd ptr bytes
+  = do mgr <- getManager
+       val <- withOverlapped_ mgr "hwndReadNonBlocking" (handle hwnd) 0
+                              (startCB ptr) completionCB
+       return $ Just $ ioValue val
+  where
+    startCB outBuf lpOverlapped = do
+      ret <- c_ReadFile (handle hwnd) (castPtr outBuf) (fromIntegral bytes)
+                        nullPtr lpOverlapped
+      err <- fmap fromIntegral Win32.getLastError
+      if   not ret
+        && (err == #{const ERROR_IO_PENDING}
+            || err == #{const ERROR_HANDLE_EOF})
+        then return Nothing
+        else return (Just err)
+
+    completionCB err dwBytes
+        | err == 0  = return $ IOSuccess $ fromIntegral dwBytes
+        | otherwise = return $ IOFailed $ Just $ fromIntegral err
+
+hwndWrite :: Handle -> Ptr Word8 -> Int -> IO ()
+hwndWrite handle ptr bytes = undefined
+
+hwndWriteNonBlocking :: Handle -> Ptr Word8 -> Int -> IO Int
+hwndWriteNonBlocking handle ptr bytes = undefined
+
+-- -----------------------------------------------------------------------------
 -- opening files
+
+test :: IO Int
+test = do hwnd <- openFile "r:\\hello.txt"
+          bytes <- allocaArray 50 $ \ptr -> hwndRead hwnd ptr 50
+          closeFile hwnd
+          return bytes
+
+test2 :: IO (Maybe Int)
+test2 = do hwnd <- openFile "r:\\hello.txt"
+           bytes <- allocaArray 50 $ \ptr -> hwndReadNonBlocking hwnd ptr 50
+           closeFile hwnd
+           return bytes
 
 openFile :: FilePath -> IO Handle
 openFile fp = do mgr <- getManager
-                     h <- createFile
-                     associateHandle mgr h
-                     return $ mkHandle h
+                 h <- createFile
+                 associateHandle mgr h
+                 return $ mkHandle h
     where
       createFile =
           Win32.withTString fp $ \fp' ->
@@ -184,25 +245,5 @@ openFile fp = do mgr <- getManager
 -- -----------------------------------------------------------------------------
 -- Operations on file descriptors
 
-readFileIOCP :: HANDLE -> IO ByteString
-readFileIOCP h = do mgr <- getManager
-                    readFile mgr
-    where
-      bufSize = 5120
-
-      readFile mgr = createAndTrim (fromIntegral bufSize) $ \outBuf ->
-                     withOverlapped mgr h 0 (startCB outBuf) completionCB
-          where
-            startCB outBuf lpOverlapped = do
-              ret <-
-                c_ReadFile h (castPtr outBuf) bufSize nullPtr lpOverlapped
-              when (not ret) $
-                   failIf_ (/= #{const ERROR_IO_PENDING}) "ReadFile failed" $
-                           Win32.getLastError
-
-            completionCB err dwBytes
-                | err == 0  = return (fromIntegral dwBytes)
-                | otherwise = FFI.throwWinErr "readFile" err
-
-closeFileIOCP :: HANDLE -> IO ()
-closeFileIOCP h = failIfFalse_ "ClosHandle failed!" $ c_CloseHandle h
+closeFile :: Handle -> IO ()
+closeFile h = failIfFalse_ "ClosHandle failed!" $ c_CloseHandle $ handle h

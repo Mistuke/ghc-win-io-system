@@ -12,6 +12,7 @@ module GHC.Event.Windows (
     -- * Overlapped I/O
     associateHandle,
     withOverlapped,
+    withOverlapped_,
     StartCallback,
     CompletionCallback,
     LPOVERLAPPED,
@@ -23,6 +24,9 @@ module GHC.Event.Windows (
     registerTimeout,
     updateTimeout,
     unregisterTimeout,
+
+    -- * IO Result type
+    IOResult(..)
 ) where
 
 import GHC.Event.Windows.Clock   (Clock, Seconds, getClock, getTime)
@@ -38,7 +42,6 @@ import Data.Foldable (mapM_)
 import Data.Maybe
 import Data.Word
 import Foreign       hiding (new)
-import Foreign.Ptr   (ptrToIntPtr)
 import Foreign.ForeignPtr.Unsafe
 import qualified GHC.Event.Array    as A
 import GHC.Arr (Array, (!), listArray)
@@ -50,6 +53,8 @@ import GHC.Real
 import GHC.Windows
 import System.IO.Unsafe     (unsafePerformIO)
 
+import qualified System.Win32.Types as Win32
+
 ------------------------------------------------------------------------
 -- Manager
 
@@ -57,6 +62,11 @@ type IOCallback = CompletionCallback ()
 
 data CompletionData = CompletionData {-# UNPACK #-} !(ForeignPtr OVERLAPPED)
                                      !IOCallback
+
+data IOResult a
+  = IOSuccess { ioValue :: a }
+  | IOFailed  { ioErrCode :: Maybe Int }
+
 
 data Manager = Manager
     { mgrIOCP         :: {-# UNPACK #-} !FFI.IOCP
@@ -118,7 +128,7 @@ callbackTableVar mgr lpol = mgrCallbacks mgr ! hashOverlapped lpol
 -- It must return successfully if and only if an I/O completion has been
 -- queued.  Otherwise, it must throw an exception, which 'withOverlapped'
 -- will rethrow.
-type StartCallback = LPOVERLAPPED -> IO ()
+type StartCallback a = LPOVERLAPPED -> IO a
 
 -- | Called when the completion is delivered.
 type CompletionCallback a = ErrCode   -- ^ 0 indicates success
@@ -142,7 +152,7 @@ withOverlapped :: Manager
                -> HANDLE
                -> Word64 -- ^ Value to use for the @OVERLAPPED@
                          --   structure's Offset/OffsetHigh members.
-               -> StartCallback
+               -> StartCallback ()
                -> CompletionCallback a
                -> IO a
 withOverlapped mgr h offset startCB completionCB = do
@@ -168,6 +178,45 @@ withOverlapped mgr h offset startCB completionCB = do
 
         let cancel = uninterruptibleMask_ $ FFI.cancelIoEx h lpol
         join (takeMVar signal `onException` cancel)
+
+-- | Same as withOverlapped except is safe and doesn't use exceptions.
+withOverlapped_ :: Manager
+                -> String
+                -> HANDLE
+                -> Word64 -- ^ Value to use for the @OVERLAPPED@
+                          --   structure's Offset/OffsetHigh members.
+                -> StartCallback (Maybe Int)
+                -> CompletionCallback (IOResult a)
+                -> IO (IOResult a)
+withOverlapped_ mgr fname h offset startCB completionCB = do
+    signal <- newEmptyMVar :: IO (MVar (IOResult a))
+    let signalReturn a = tryPutMVar signal (IOSuccess a) >> return ()
+        signalThrow ex = tryPutMVar signal (IOFailed ex) >> return ()
+    mask_ $ do
+        let completionCB' e b = completionCB e b >>= \result ->
+                                  case result of
+                                    IOSuccess val -> signalReturn val
+                                    IOFailed  err -> signalThrow err
+        fptr <- FFI.allocOverlapped offset
+        let lpol = unsafeForeignPtrToPtr fptr
+        _ <- withMVar (callbackTableVar mgr lpol) $ \tbl ->
+             IT.insertWith (flip const) (lpoverlappedToInt lpol)
+               (CompletionData fptr completionCB') tbl
+
+        startCB lpol `onException` (Just `fmap` Win32.getLastError) >>= \result ->
+          case result of
+            Nothing -> return ()
+            Just err -> do
+                _ <- withMVar (callbackTableVar mgr lpol) $ \tbl ->
+                    IT.delete (lpoverlappedToInt lpol) tbl
+                signalThrow (Just err)
+
+        let cancel = uninterruptibleMask_ $ FFI.cancelIoEx h lpol
+        let runner = do res <- takeMVar signal `onException` cancel
+                        case res of
+                          IOFailed err -> FFI.throwWinErr fname (maybe 0 fromIntegral err)
+                          _            -> return res
+        runner
 
 ------------------------------------------------------------------------
 -- Timeouts
