@@ -24,6 +24,7 @@ module GHC.IO.Windows.Handle
    Handle(..),
    test,
    test2,
+   test3,
    -- * Standard Handles
    stdin,
    stdout,
@@ -56,7 +57,7 @@ import GHC.IO.Device (SeekMode(..), IODeviceType(..))
 import GHC.Event.Windows (LPOVERLAPPED, associateHandle', withOverlapped,
                           IOResult(..))
 import Foreign.Ptr
-import Foreign.Marshal.Array (allocaArray)
+import Foreign.Marshal.Array (allocaArray, withArray)
 import qualified GHC.Event.Windows as Mgr
 import qualified GHC.Event.Windows.FFI as FFI
 
@@ -155,6 +156,10 @@ foreign import WINDOWS_CCONV unsafe "windows.h ReadFile"
     c_ReadFile :: HANDLE -> LPVOID -> DWORD -> LPDWORD -> LPOVERLAPPED
                -> IO BOOL
 
+foreign import WINDOWS_CCONV unsafe "windows.h WriteFile"
+    c_WriteFile :: HANDLE -> LPVOID -> DWORD -> LPDWORD -> LPOVERLAPPED
+                -> IO BOOL
+
 type LPSECURITY_ATTRIBUTES = LPVOID
 
 -- -----------------------------------------------------------------------------
@@ -188,8 +193,8 @@ hwndReadNonBlocking hwnd ptr bytes
                               (startCB ptr) completionCB
        return $ Just $ fromIntegral $ ioValue val
   where
-    startCB outBuf lpOverlapped = do
-      ret <- c_ReadFile (getHandle hwnd) (castPtr outBuf) (fromIntegral bytes)
+    startCB inputBuf lpOverlapped = do
+      ret <- c_WriteFile (getHandle hwnd) (castPtr inputBuf) (fromIntegral bytes)
                         nullPtr lpOverlapped
       err <- fmap fromIntegral Win32.getLastError
       if   not ret
@@ -203,7 +208,22 @@ hwndReadNonBlocking hwnd ptr bytes
         | otherwise = Mgr.ioFailed err
 
 hwndWrite :: Handle -> Ptr Word8 -> Int -> IO ()
-hwndWrite handle ptr bytes = undefined
+hwndWrite hwnd ptr bytes
+  = do _ <- Mgr.withException "hwndWrite" $
+          withOverlapped "hwndWrite" (getHandle hwnd) 0 (startCB ptr) completionCB
+       return ()
+  where
+    startCB outBuf lpOverlapped = do
+      ret <- c_ReadFile (getHandle hwnd) (castPtr outBuf) (fromIntegral bytes)
+                        nullPtr lpOverlapped
+      when (not ret) $
+            failIf_ (/= #{const ERROR_IO_PENDING}) "WriteFile failed" $
+                    Win32.getLastError
+      return Nothing
+
+    completionCB err dwBytes
+        | err == 0  = Mgr.ioSuccess $ fromIntegral dwBytes
+        | otherwise = Mgr.ioFailed err
 
 hwndWriteNonBlocking :: Handle -> Ptr Word8 -> Int -> IO Int
 hwndWriteNonBlocking handle ptr bytes = undefined
@@ -223,6 +243,14 @@ test2 = do hwnd <- openFile "r:\\hello.txt"
            closeFile hwnd
            return bytes
 
+test3 :: IO Int
+test3 = do hwnd <- openFile2 "r:\\hello2.txt"
+           let vals = fmap fromIntegral [1..300]
+           let num = Prelude.length vals
+           bytes <- withArray vals $ \ptr -> hwndWrite hwnd ptr num
+           closeFile hwnd
+           return num
+
 openFile :: FilePath -> IO Handle
 openFile fp = do h <- createFile
                  associateHandle' h
@@ -236,6 +264,21 @@ openFile fp = do h <- createFile
                                       nullPtr
                                       #{const OPEN_EXISTING}
                                       (#{const FILE_FLAG_OVERLAPPED} .|. #{const FILE_FLAG_SEQUENTIAL_SCAN })
+                                      nullHANDLE
+
+openFile2 :: FilePath -> IO Handle
+openFile2 fp = do h <- createFile
+                  associateHandle' h
+                  return $ mkHandle h
+    where
+      createFile =
+          Win32.withTString fp $ \fp' ->
+              failIf (== iNVALID_HANDLE_VALUE) "CreateFile failed" $
+                     c_CreateFile fp' #{const GENERIC_WRITE}
+                                      (#{const FILE_SHARE_WRITE} .|. #{const FILE_SHARE_READ})
+                                      nullPtr
+                                      #{const CREATE_ALWAYS}
+                                      #{const FILE_FLAG_OVERLAPPED}
                                       nullHANDLE
 
 -- -----------------------------------------------------------------------------
