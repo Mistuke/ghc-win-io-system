@@ -21,7 +21,8 @@
 
 module GHC.IO.Windows.Handle
  ( -- * Basic Types
-   Handle(..),
+   Handle(),
+   ConsoleHandle(),
    test,
    test2,
    test3,
@@ -35,6 +36,7 @@ module GHC.IO.Windows.Handle
 ##include "windows_cconv.h"
 
 import Prelude hiding (readFile)
+import Control.Applicative ((<$>))
 import Control.Monad (when)
 import Data.Bits ((.|.))
 import Data.ByteString hiding (readFile)
@@ -70,14 +72,28 @@ import qualified System.Win32.Types as Win32
 -- The Windows IO device
 
 newtype Handle = Handle { getHandle :: HANDLE }
+newtype ConsoleHandle = ConsoleHandle { getConsoleHandle :: HANDLE }
+
+-- | Convert a ConsoleHandle into a general FileHandle
+--   This will change which DeviceIO is used.
+convertHandle :: ConsoleHandle -> Handle
+convertHandle = mkHandle . getConsoleHandle
 
 -- | Create a new Handle object
 mkHandle :: HANDLE -> Handle
 mkHandle = Handle
 
+-- | Create a new Console Handle object
+mkConsoleHandle :: HANDLE -> ConsoleHandle
+mkConsoleHandle = ConsoleHandle
+
 -- | @since 4.11.0.0
 instance Show Handle where
   show = show . getHandle
+
+-- | @since 4.11.0.0
+instance Show ConsoleHandle where
+  show = show . getConsoleHandle
 
 -- | @since 4.11.0.0
 instance GHC.IO.Device.RawIO Handle where
@@ -89,8 +105,8 @@ instance GHC.IO.Device.RawIO Handle where
 -- | @since 4.11.0.0
 instance GHC.IO.Device.IODevice Handle where
   --ready         = ready
-  --close         = close
-  --isTerminal    = isTerminal
+  close        h = closeFile h >> return ()
+  isTerminal   _ = return False
   --isSeekable    = isSeekable
   --seek          = seek
   --tell          = tell
@@ -100,6 +116,23 @@ instance GHC.IO.Device.IODevice Handle where
   --getEcho       = getEcho
   --setRaw        = setRaw
   --devType       = devType
+  --dup           = dup
+  --dup2          = dup2
+
+-- | @since 4.11.0.0
+instance GHC.IO.Device.IODevice ConsoleHandle where
+  --ready         = ready
+  close         h = closeFile (convertHandle h) >> return ()
+  isTerminal    _ = return True
+  --isSeekable    = isSeekable
+  --seek          = seek
+  --tell          = tell
+  --getSize       = getSize
+  --setSize       = setSize
+  --setEcho       = setEcho
+  --getEcho       = getEcho
+  --setRaw        = setRaw
+  devType       _ = return RegularFile
   --dup           = dup
   --dup2          = dup2
 
@@ -136,10 +169,10 @@ getStdHandle hid =
 foreign import WINDOWS_CCONV unsafe "windows.h GetStdHandle"
     c_GetStdHandle :: StdHandleId -> IO HANDLE
 
-stdin, stdout, stderr :: IO HANDLE
-stdin  = getStdHandle sTD_INPUT_HANDLE
-stdout = getStdHandle sTD_OUTPUT_HANDLE
-stderr = getStdHandle sTD_ERROR_HANDLE
+stdin, stdout, stderr :: IO ConsoleHandle
+stdin  = mkConsoleHandle <$> getStdHandle sTD_INPUT_HANDLE
+stdout = mkConsoleHandle <$> getStdHandle sTD_OUTPUT_HANDLE
+stderr = mkConsoleHandle <$> getStdHandle sTD_ERROR_HANDLE
 
 -- -----------------------------------------------------------------------------
 -- Foreign imports
@@ -194,7 +227,7 @@ hwndReadNonBlocking hwnd ptr bytes
        return $ Just $ fromIntegral $ ioValue val
   where
     startCB inputBuf lpOverlapped = do
-      ret <- c_WriteFile (getHandle hwnd) (castPtr inputBuf) (fromIntegral bytes)
+      ret <- c_ReadFile (getHandle hwnd) (castPtr inputBuf) (fromIntegral bytes)
                         nullPtr lpOverlapped
       err <- fmap fromIntegral Win32.getLastError
       if   not ret
@@ -214,8 +247,8 @@ hwndWrite hwnd ptr bytes
        return ()
   where
     startCB outBuf lpOverlapped = do
-      ret <- c_ReadFile (getHandle hwnd) (castPtr outBuf) (fromIntegral bytes)
-                        nullPtr lpOverlapped
+      ret <- c_WriteFile (getHandle hwnd) (castPtr outBuf) (fromIntegral bytes)
+                         nullPtr lpOverlapped
       when (not ret) $
             failIf_ (/= #{const ERROR_IO_PENDING}) "WriteFile failed" $
                     Win32.getLastError
@@ -282,7 +315,7 @@ openFile2 fp = do h <- createFile
                                       nullHANDLE
 
 -- -----------------------------------------------------------------------------
--- Operations on file descriptors
+-- Operations on file handles
 
 closeFile :: Handle -> IO ()
-closeFile = failIfFalse_ "ClosHandle failed!" . c_CloseHandle . getHandle
+closeFile = failIfFalse_ "CloseHandle failed!" . c_CloseHandle . getHandle
