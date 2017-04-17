@@ -2,7 +2,7 @@ name:               win-io-mngr
 version:            0.1.0.0
 synopsis:           Native Windows IO Manager for the Glasgow Haskell Compiler.
 -- description:
-homepage:           https://github.com/Mistuke/haskell-iocp
+homepage:           https://github.com/Mistuke/ghc-win-io-system
 license:            BSD3
 license-file:       LICENSE
 author:             Joey Adams, Mikhail Glushenkov, Tamar Christina
@@ -19,7 +19,7 @@ extra-source-files:
 
 source-repository head
     type:       git
-    location:   git@github.com:Mistuke/haskell-iocp.git
+    location:   git@github.com:Mistuke/ghc-win-io-system.git
 
 library
     exposed-modules:
@@ -38,9 +38,10 @@ library
 
     c-sources:
         cbits/Winsock.c
+        cbits/IOutils.c
 
     build-tools: hsc2hs
-    extensions:    ForeignFunctionInterface, CPP
+    extensions:  ForeignFunctionInterface, CPP
 
     ghc-options:
         -Wall -fwarn-tabs -fno-warn-missing-signatures
@@ -57,6 +58,7 @@ library
     include-dirs:     include
     includes:         "windows_cconv.h", "alignment.h"
     install-includes:
+    extra-libraries: Ws2_32
 
 
 flag all-tests

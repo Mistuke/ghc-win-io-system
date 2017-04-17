@@ -5,8 +5,12 @@
  */
 
 #include <stdbool.h>
+#include <Winsock2.h>
 #include <windows.h>
 #include <io.h>
+
+/* Import some functions defined in base.  */
+extern void maperrno(void);
 
 /*
  * handleReady(hwnd) checks to see whether input is available on the file
@@ -14,7 +18,7 @@
  * *character* from this file object without blocking?'
  */
 int
-__handleReady(HANDLE hFile, bool write, int msecs)
+__handle_ready(HANDLE hFile, bool write, int msecs)
 {
     DWORD handleType = GetFileType (hFile);
 
@@ -28,14 +32,14 @@ __handleReady(HANDLE hFile, bool write, int msecs)
             INPUT_RECORD buf[1];
             DWORD count;
 
-            // A Console Handle will appear to be ready
-            // (WaitForSingleObject() returned WAIT_OBJECT_0) when
-            // it has events in its input buffer, but these events might
-            // not be keyboard events, so when we read from the Handle the
-            // read() will block.  So here we try to discard non-keyboard
-            // events from a console handle's input buffer and then try
-            // the WaitForSingleObject() again.
-            // Phyx: I'm worried that we're discarding events someone else may need.
+            /* A Console Handle will appear to be ready
+             (WaitForSingleObject() returned WAIT_OBJECT_0) when
+             it has events in its input buffer, but these events might
+             not be keyboard events, so when we read from the Handle the
+             read() will block.  So here we try to discard non-keyboard
+             events from a console handle's input buffer and then try
+             the WaitForSingleObject() again.
+             Phyx: I'm worried that we're discarding events someone else may need.  */
             while (true) // keep trying until we find a real key event
             {
                 rc = WaitForSingleObject( hFile, msecs );
@@ -53,8 +57,8 @@ __handleReady(HANDLE hFile, bool write, int msecs)
 
                 while (true) // discard non-key events
                 {
-                    // I wonder if we can do better by grabbing a list of
-                    // input records at a time by using PeekConsoleInput.
+                    /* I wonder if we can do better by grabbing a list of
+                       input records at a time by using PeekConsoleInput.  */
                     rc = PeekConsoleInput(hFile, buf, 1, &count);
                     if (rc == 0) {
                         rc = GetLastError();
@@ -67,18 +71,18 @@ __handleReady(HANDLE hFile, bool write, int msecs)
                     }
 
                     if (count == 0)
-                        break; // no more events => wait again
+                        break; /* no more events => wait again.  */
 
-                    // discard console events that are not "key down", because
-                    // these will also be discarded by ReadFile().
+                    /* discard console events that are not "key down", because
+                       these will also be discarded by ReadFile().  */
                     if (buf[0].EventType == KEY_EVENT &&
                         buf[0].Event.KeyEvent.bKeyDown &&
                         buf[0].Event.KeyEvent.uChar.AsciiChar != '\0')
-                          return true; // it's a proper keypress.
+                          return true; /* it's a proper keypress.  */
                     else
                     {
-                        // it's a non-key event, a key up event, or a
-                        // non-character key (e.g. shift).  discard it.
+                        /* it's a non-key event, a key up event, or a
+                           non-character key (e.g. shift).  discard it.  */
                         rc = ReadConsoleInput(hFile, buf, 1, &count);
                         if (rc == 0) {
                             rc = GetLastError();
@@ -94,7 +98,7 @@ __handleReady(HANDLE hFile, bool write, int msecs)
             }
         }
         case FILE_TYPE_DISK:
-            // assume that disk files are always ready:
+            /* assume that disk files are always ready.  */
             return true;
 
         case FILE_TYPE_PIPE:
@@ -199,7 +203,7 @@ bool __is_console(HANDLE hFile)
         assume works, so if it doesn't work for all intents
         and purposes we're not dealing with a terminal. */
     if (!GetConsoleMode(hFile, &st))
-        return false
+        return false;
 
     return true;
 }
@@ -256,12 +260,12 @@ __flush_input_console(HANDLE hFile)
 	 * operation as a NOP.
 	 */
 	DWORD unused;
-	if ( !GetConsoleMode(h, &unused) &&
+	if ( !GetConsoleMode(hFile, &unused) &&
 	     GetLastError() == ERROR_INVALID_HANDLE ) {
 	    return false;
 	}
 
-	if ( FlushConsoleInputBuffer(h) )
+	if ( FlushConsoleInputBuffer(hFile) )
 	    return true;
 
     maperrno();

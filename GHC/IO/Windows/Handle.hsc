@@ -59,6 +59,7 @@ import GHC.IO.Device (SeekMode(..), IODeviceType(..))
 import GHC.Event.Windows (LPOVERLAPPED, associateHandle', withOverlapped,
                           IOResult(..))
 import Foreign.Ptr
+import Foreign.C
 import Foreign.Marshal.Array (allocaArray, withArray)
 import qualified GHC.Event.Windows as Mgr
 import qualified GHC.Event.Windows.FFI as FFI
@@ -69,7 +70,7 @@ import System.Win32.Types (LPCTSTR, LPVOID, LPDWORD, DWORD, HANDLE, BOOL,
 import qualified System.Win32.Types as Win32
 
 -- -----------------------------------------------------------------------------
--- The Windows IO device
+-- The Windows IO device handles
 
 newtype Handle = Handle { getHandle :: HANDLE }
 newtype ConsoleHandle = ConsoleHandle { getConsoleHandle :: HANDLE }
@@ -77,15 +78,7 @@ newtype ConsoleHandle = ConsoleHandle { getConsoleHandle :: HANDLE }
 -- | Convert a ConsoleHandle into a general FileHandle
 --   This will change which DeviceIO is used.
 convertHandle :: ConsoleHandle -> Handle
-convertHandle = mkHandle . getConsoleHandle
-
--- | Create a new Handle object
-mkHandle :: HANDLE -> Handle
-mkHandle = Handle
-
--- | Create a new Console Handle object
-mkConsoleHandle :: HANDLE -> ConsoleHandle
-mkConsoleHandle = ConsoleHandle
+convertHandle = fromHANDLE . toHANDLE
 
 -- | @since 4.11.0.0
 instance Show Handle where
@@ -102,11 +95,27 @@ instance GHC.IO.Device.RawIO Handle where
   write            = hwndWrite
   writeNonBlocking = hwndWriteNonBlocking
 
+-- | Generalize a way to get and create handles.
+class RawHandle a where
+  toHANDLE   :: a -> HANDLE
+  fromHANDLE :: HANDLE -> a
+
+instance RawHandle Handle where
+  toHANDLE   = getHandle
+  fromHANDLE = Handle
+
+instance RawHandle ConsoleHandle where
+  toHANDLE   = getConsoleHandle
+  fromHANDLE = ConsoleHandle
+
+-- -----------------------------------------------------------------------------
+-- The Windows IO device implementation
+
 -- | @since 4.11.0.0
 instance GHC.IO.Device.IODevice Handle where
-  --ready         = ready
+  ready         = handle_ready
   close        h = closeFile h >> return ()
-  isTerminal   _ = return False
+  isTerminal    = handle_is_console
   --isSeekable    = isSeekable
   --seek          = seek
   --tell          = tell
@@ -121,9 +130,9 @@ instance GHC.IO.Device.IODevice Handle where
 
 -- | @since 4.11.0.0
 instance GHC.IO.Device.IODevice ConsoleHandle where
-  --ready         = ready
+  ready         = handle_ready
   close         h = closeFile (convertHandle h) >> return ()
-  isTerminal    _ = return True
+  isTerminal    = handle_is_console
   --isSeekable    = isSeekable
   --seek          = seek
   --tell          = tell
@@ -132,7 +141,7 @@ instance GHC.IO.Device.IODevice ConsoleHandle where
   --setEcho       = setEcho
   --getEcho       = getEcho
   --setRaw        = setRaw
-  devType       _ = return RegularFile
+  --devType       _ = return RegularFile
   --dup           = dup
   --dup2          = dup2
 
@@ -166,13 +175,10 @@ getStdHandle :: StdHandleId -> IO HANDLE
 getStdHandle hid =
   failIf (== iNVALID_HANDLE_VALUE) "GetStdHandle" $ c_GetStdHandle hid
 
-foreign import WINDOWS_CCONV unsafe "windows.h GetStdHandle"
-    c_GetStdHandle :: StdHandleId -> IO HANDLE
-
 stdin, stdout, stderr :: IO ConsoleHandle
-stdin  = mkConsoleHandle <$> getStdHandle sTD_INPUT_HANDLE
-stdout = mkConsoleHandle <$> getStdHandle sTD_OUTPUT_HANDLE
-stderr = mkConsoleHandle <$> getStdHandle sTD_ERROR_HANDLE
+stdin  = fromHANDLE <$> getStdHandle sTD_INPUT_HANDLE
+stdout = fromHANDLE <$> getStdHandle sTD_OUTPUT_HANDLE
+stderr = fromHANDLE <$> getStdHandle sTD_ERROR_HANDLE
 
 -- -----------------------------------------------------------------------------
 -- Foreign imports
@@ -192,6 +198,27 @@ foreign import WINDOWS_CCONV unsafe "windows.h ReadFile"
 foreign import WINDOWS_CCONV unsafe "windows.h WriteFile"
     c_WriteFile :: HANDLE -> LPVOID -> DWORD -> LPDWORD -> LPOVERLAPPED
                 -> IO BOOL
+
+foreign import WINDOWS_CCONV unsafe "windows.h GetStdHandle"
+    c_GetStdHandle :: StdHandleId -> IO HANDLE
+
+foreign import ccall safe "__handle_ready"
+    c_handle_ready :: HANDLE -> BOOL -> CInt -> IO CInt
+
+foreign import ccall safe "__is_console"
+    c_is_console :: HANDLE -> IO BOOL
+
+foreign import ccall safe "__set_console_buffering"
+    c_set_console_buffering :: HANDLE -> BOOL -> IO BOOL
+
+foreign import ccall safe "__set_console_echo"
+    c_set_console_echo :: HANDLE -> BOOL -> IO BOOL
+
+foreign import ccall safe "__get_console_echo"
+    c_get_console_echo :: HANDLE -> IO BOOL
+
+foreign import ccall safe "__flush_input_console"
+    c_flush_input_console :: HANDLE -> IO BOOL
 
 type LPSECURITY_ATTRIBUTES = LPVOID
 
@@ -305,7 +332,7 @@ test3 = do hwnd <- openFile2 "r:\\hello2.txt"
 openFile :: FilePath -> IO Handle
 openFile fp = do h <- createFile
                  associateHandle' h
-                 return $ mkHandle h
+                 return $ fromHANDLE h
     where
       createFile =
           Win32.withTString fp $ \fp' ->
@@ -320,7 +347,7 @@ openFile fp = do h <- createFile
 openFile2 :: FilePath -> IO Handle
 openFile2 fp = do h <- createFile
                   associateHandle' h
-                  return $ mkHandle h
+                  return $ fromHANDLE h
     where
       createFile =
           Win32.withTString fp $ \fp' ->
@@ -335,5 +362,14 @@ openFile2 fp = do h <- createFile
 -- -----------------------------------------------------------------------------
 -- Operations on file handles
 
-closeFile :: Handle -> IO ()
-closeFile = failIfFalse_ "CloseHandle failed!" . c_CloseHandle . getHandle
+closeFile :: RawHandle a => a -> IO ()
+closeFile = failIfFalse_ "CloseHandle failed!" . c_CloseHandle . toHANDLE
+
+handle_ready :: RawHandle a => a -> Bool -> Int -> IO Bool
+handle_ready hwnd write msecs = do
+  r <- throwErrnoIfMinus1Retry "GHC.IO.Windows.Handle.handle_ready" $
+          c_handle_ready (toHANDLE hwnd) write (fromIntegral msecs)
+  return (toEnum (fromIntegral r))
+
+handle_is_console :: RawHandle a => a -> IO Bool
+handle_is_console = c_is_console . toHANDLE
