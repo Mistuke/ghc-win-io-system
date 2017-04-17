@@ -230,7 +230,7 @@ hwndReadNonBlocking hwnd ptr bytes
       ret <- c_ReadFile (getHandle hwnd) (castPtr inputBuf) (fromIntegral bytes)
                         nullPtr lpOverlapped
       err <- fmap fromIntegral Win32.getLastError
-      if   not ret
+      if not ret
         && (err == #{const ERROR_IO_PENDING}
             || err == #{const ERROR_HANDLE_EOF})
         then return Nothing
@@ -259,7 +259,25 @@ hwndWrite hwnd ptr bytes
         | otherwise = Mgr.ioFailed err
 
 hwndWriteNonBlocking :: Handle -> Ptr Word8 -> Int -> IO Int
-hwndWriteNonBlocking handle ptr bytes = undefined
+hwndWriteNonBlocking hwnd ptr bytes
+  = do val <- withOverlapped "hwndReadNonBlocking" (getHandle hwnd) 0
+                             (startCB ptr) completionCB
+       return $ fromIntegral $ ioValue val
+  where
+    startCB outBuf lpOverlapped = do
+      ret <- c_WriteFile (getHandle hwnd) (castPtr outBuf) (fromIntegral bytes)
+                         nullPtr lpOverlapped
+      err <- fmap fromIntegral Win32.getLastError
+
+      if not ret
+        && (err == #{const ERROR_IO_PENDING}
+            || err == #{const ERROR_HANDLE_EOF})
+        then return Nothing
+        else return (Just err)
+
+    completionCB err dwBytes
+        | err == 0  = Mgr.ioSuccess $ fromIntegral dwBytes
+        | otherwise = Mgr.ioFailed err
 
 -- -----------------------------------------------------------------------------
 -- opening files
@@ -278,7 +296,7 @@ test2 = do hwnd <- openFile "r:\\hello.txt"
 
 test3 :: IO Int
 test3 = do hwnd <- openFile2 "r:\\hello2.txt"
-           let vals = fmap fromIntegral [1..300]
+           let vals = fmap fromIntegral [1..30000]
            let num = Prelude.length vals
            bytes <- withArray vals $ \ptr -> hwndWrite hwnd ptr num
            closeFile hwnd
