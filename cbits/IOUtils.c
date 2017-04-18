@@ -12,6 +12,19 @@
 /* Import some functions defined in base.  */
 extern void maperrno(void);
 
+/* Enum of Handle type.  */
+typedef
+enum HandleType
+  {
+    TYPE_CHAR,   // 0
+    TYPE_DISK,   // 1
+    TYPE_PIPE,   // 2
+    TYPE_SOCKET, // 3
+    TYPE_REMOTE, // 4
+    TYPE_RAW,    // 5
+    TYPE_UNKNOWN // 6
+  } HANDLE_TYPE;
+
 /*
  * handleReady(hwnd) checks to see whether input is available on the file
  * handle 'hwnd'.  Input meaning 'can I safely read at least a
@@ -134,7 +147,6 @@ __handle_ready(HANDLE hFile, bool write, int msecs)
                         maperrno();
                         return -1;
                     }
-
                 }
                 /* PeekNamedPipe didn't work - fall through to the general case */
             }
@@ -185,7 +197,8 @@ __handle_ready(HANDLE hFile, bool write, int msecs)
       }
 }
 
-bool __is_console(HANDLE hFile)
+bool
+__is_console(HANDLE hFile)
 {
     /* Broken handle can't be terminal */
     if (hFile == INVALID_HANDLE_VALUE)
@@ -270,4 +283,50 @@ __flush_input_console(HANDLE hFile)
 
     maperrno();
     return false;
+}
+
+HANDLE_TYPE
+__handle_type (HANDLE hFile)
+{
+    DWORD handleType = GetFileType (hFile);
+    switch (handleType)
+      {
+        case FILE_TYPE_PIPE:
+          {
+            WSAEVENT newEvent = WSACreateEvent();
+            DWORD rc = WSAEventSelect((SOCKET)hFile, newEvent, FD_CLOSE);
+            CloseHandle (newEvent);
+            if (rc == WSAENOTSOCK)
+              return TYPE_SOCKET;
+            else
+              return TYPE_PIPE;
+          }
+        case FILE_TYPE_CHAR:
+          return TYPE_CHAR;
+        case FILE_TYPE_DISK:
+          return TYPE_DISK;
+        case FILE_TYPE_REMOTE:
+          return TYPE_REMOTE;
+        case FILE_TYPE_UNKNOWN:
+        default:
+          return TYPE_UNKNOWN;
+      }
+}
+
+void
+__close_handle (HANDLE hFile)
+{
+    switch (__handle_type (hFile))
+      {
+        case TYPE_SOCKET:
+          {
+            closesocket ((SOCKET)hFile);
+            return;
+          }
+        default:
+          {
+            CloseHandle (hFile);
+            return;
+          }
+      }
 }

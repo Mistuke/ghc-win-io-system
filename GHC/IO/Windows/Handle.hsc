@@ -114,9 +114,9 @@ instance RawHandle ConsoleHandle where
 -- | @since 4.11.0.0
 instance GHC.IO.Device.IODevice Handle where
   ready         = handle_ready
-  close        h = closeFile h >> return ()
+  close         = handle_close
   isTerminal    = handle_is_console
-  --isSeekable    = isSeekable
+  isSeekable    = handle_is_seekable
   --seek          = seek
   --tell          = tell
   --getSize       = getSize
@@ -124,16 +124,16 @@ instance GHC.IO.Device.IODevice Handle where
   --setEcho       = setEcho
   --getEcho       = getEcho
   --setRaw        = setRaw
-  --devType       = devType
+  devType       = handle_dev_type
   --dup           = dup
   --dup2          = dup2
 
 -- | @since 4.11.0.0
 instance GHC.IO.Device.IODevice ConsoleHandle where
   ready         = handle_ready
-  close         h = closeFile (convertHandle h) >> return ()
+  close         = handle_close . convertHandle
   isTerminal    = handle_is_console
-  --isSeekable    = isSeekable
+  isSeekable    = handle_is_seekable
   --seek          = seek
   --tell          = tell
   --getSize       = getSize
@@ -141,7 +141,7 @@ instance GHC.IO.Device.IODevice ConsoleHandle where
   --setEcho       = setEcho
   --getEcho       = getEcho
   --setRaw        = setRaw
-  --devType       _ = return RegularFile
+  devType       = handle_dev_type
   --dup           = dup
   --dup2          = dup2
 
@@ -219,6 +219,12 @@ foreign import ccall safe "__get_console_echo"
 
 foreign import ccall safe "__flush_input_console"
     c_flush_input_console :: HANDLE -> IO BOOL
+
+foreign import ccall safe "__close_handle"
+    c_close_handle :: HANDLE -> IO ()
+
+foreign import ccall safe "__handle_type"
+    c_handle_type :: HANDLE -> IO Int
 
 type LPSECURITY_ATTRIBUTES = LPVOID
 
@@ -373,3 +379,18 @@ handle_ready hwnd write msecs = do
 
 handle_is_console :: RawHandle a => a -> IO Bool
 handle_is_console = c_is_console . toHANDLE
+
+handle_close :: RawHandle a => a -> IO ()
+handle_close = c_close_handle . toHANDLE
+
+handle_dev_type :: RawHandle a => a -> IO IODeviceType
+handle_dev_type hwnd = do _type <- c_handle_type $ toHANDLE hwnd
+                          return $ case _type of
+                                     _ | _type == 3 -> Stream
+                                       | _type == 5 -> RawDevice
+                                       | otherwise  -> RegularFile
+
+handle_is_seekable :: RawHandle a => a -> IO Bool
+handle_is_seekable hwnd = do
+  t <- handle_dev_type hwnd
+  return (t == RegularFile || t == RawDevice)
