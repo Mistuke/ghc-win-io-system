@@ -60,7 +60,9 @@ import GHC.Event.Windows (LPOVERLAPPED, associateHandle', withOverlapped,
                           IOResult(..))
 import Foreign.Ptr
 import Foreign.C
+import Foreign.Marshal.Alloc (alloca)
 import Foreign.Marshal.Array (allocaArray, withArray)
+import Foreign.Storable (peek)
 import qualified GHC.Event.Windows as Mgr
 import qualified GHC.Event.Windows.FFI as FFI
 
@@ -123,9 +125,9 @@ instance GHC.IO.Device.IODevice Handle where
   setSize       = handle_set_size
   setEcho       = handle_set_echo
   getEcho       = handle_get_echo
-  --setRaw        = setRaw
+  setRaw        = handle_set_buffering
   devType       = handle_dev_type
-  --dup           = dup
+  dup           = handle_duplicate
   --dup2          = dup2
 
 -- | @since 4.11.0.0
@@ -138,11 +140,11 @@ instance GHC.IO.Device.IODevice ConsoleHandle where
   --tell          = tell
   --getSize       = getSize
   --setSize       = setSize
-  --setEcho       = setEcho
-  --getEcho       = getEcho
-  --setRaw        = setRaw
+  setEcho       = handle_set_echo
+  getEcho       = handle_get_echo
+  setRaw        = handle_set_buffering
   devType       = handle_dev_type
-  --dup           = dup
+  dup           = handle_duplicate
   --dup2          = dup2
 
 -- Default sequential read buffer size.
@@ -237,6 +239,9 @@ foreign import ccall safe "__get_file_size"
 
 foreign import ccall safe "__set_file_size"
   c_set_file_size :: HANDLE -> CLong -> IO BOOL
+
+foreign import ccall safe "__duplicate_handle"
+  c_duplicate_handle :: HANDLE -> Ptr HANDLE -> IO BOOL
 
 type LPSECURITY_ATTRIBUTES = LPVOID
 
@@ -442,3 +447,14 @@ handle_set_echo hwnd value =
 
 handle_get_echo :: RawHandle a => a -> IO Bool
 handle_get_echo = c_get_console_echo . toHANDLE
+
+handle_duplicate :: RawHandle a => a -> IO a
+handle_duplicate hwnd = alloca $ \ptr -> do
+  throwErrnoIf_ not "GHC.IO.Handle.handle_duplicate" $
+      c_duplicate_handle (toHANDLE hwnd) ptr
+  fromHANDLE <$> peek ptr
+
+handle_set_buffering :: RawHandle a => a -> Bool -> IO ()
+handle_set_buffering hwnd value =
+  throwErrnoIf_ not "GHC.IO.Handle.handle_set_buffering" $
+      c_set_console_buffering (toHANDLE hwnd) value

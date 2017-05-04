@@ -368,3 +368,21 @@ bool __set_file_size (HANDLE hFile, int64_t size)
 
     return SetEndOfFile (hFile);
 }
+
+bool __duplicate_handle (HANDLE hFile, HANDLE* hFileDup)
+{
+    switch (__handle_type (hFile))
+    {
+        case TYPE_SOCKET:
+            // should use WSADuplicateSocket
+            return false;
+        default:
+            return DuplicateHandle(GetCurrentProcess(),
+                                hFile,
+                                GetCurrentProcess(),
+                                &hFileDup,
+                                0,
+                                FALSE,
+                                DUPLICATE_SAME_ACCESS);
+    }
+}
