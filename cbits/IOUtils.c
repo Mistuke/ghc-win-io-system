@@ -5,6 +5,7 @@
  */
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <Winsock2.h>
 #include <windows.h>
 #include <io.h>
@@ -329,4 +330,41 @@ __close_handle (HANDLE hFile)
             return;
           }
       }
+}
+
+bool __set_file_pointer (HANDLE hFile, int64_t pos, DWORD moveMethod)
+{
+    LARGE_INTEGER li;
+    li.QuadPart = pos;
+    return SetFilePointerEx (hFile, li, NULL, moveMethod);
+}
+
+int64_t __get_file_pointer (HANDLE hFile)
+{
+    LARGE_INTEGER ret;
+    LARGE_INTEGER pos;
+    pos.QuadPart = 0;
+    if (!SetFilePointerEx(hFile, pos, &ret, FILE_CURRENT))
+      return -1;
+
+    return ret.QuadPart;
+}
+
+int64_t __get_file_size (HANDLE hFile)
+{
+    LARGE_INTEGER ret;
+    if (!GetFileSizeEx(hFile, &ret))
+      return -1;
+
+    return ret.QuadPart;
+}
+
+bool __set_file_size (HANDLE hFile, int64_t size)
+{
+    LARGE_INTEGER li;
+    li.QuadPart = size;
+    if(!SetFilePointerEx (hFile, li, NULL, FILE_BEGIN))
+        return false;
+
+    return SetEndOfFile (hFile);
 }

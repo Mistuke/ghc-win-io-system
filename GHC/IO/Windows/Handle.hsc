@@ -117,12 +117,12 @@ instance GHC.IO.Device.IODevice Handle where
   close         = handle_close
   isTerminal    = handle_is_console
   isSeekable    = handle_is_seekable
-  --seek          = seek
-  --tell          = tell
-  --getSize       = getSize
-  --setSize       = setSize
-  --setEcho       = setEcho
-  --getEcho       = getEcho
+  seek          = handle_seek
+  tell          = handle_tell
+  getSize       = handle_get_size
+  setSize       = handle_set_size
+  setEcho       = handle_set_echo
+  getEcho       = handle_get_echo
   --setRaw        = setRaw
   devType       = handle_dev_type
   --dup           = dup
@@ -225,6 +225,18 @@ foreign import ccall safe "__close_handle"
 
 foreign import ccall safe "__handle_type"
     c_handle_type :: HANDLE -> IO Int
+
+foreign import ccall safe "__set_file_pointer"
+  c_set_file_pointer :: HANDLE -> CLong -> DWORD -> IO BOOL
+
+foreign import ccall safe "__get_file_pointer"
+  c_get_file_pointer :: HANDLE -> IO CLong
+
+foreign import ccall safe "__get_file_size"
+  c_get_file_size :: HANDLE -> IO CLong
+
+foreign import ccall safe "__set_file_size"
+  c_set_file_size :: HANDLE -> CLong -> IO BOOL
 
 type LPSECURITY_ATTRIBUTES = LPVOID
 
@@ -394,3 +406,39 @@ handle_is_seekable :: RawHandle a => a -> IO Bool
 handle_is_seekable hwnd = do
   t <- handle_dev_type hwnd
   return (t == RegularFile || t == RawDevice)
+
+handle_seek :: RawHandle a => a -> SeekMode -> Integer -> IO ()
+handle_seek hwnd mode off =
+  throwErrnoIf_ not "GHC.IO.Handle.handle_seek" $
+      c_set_file_pointer (toHANDLE hwnd) (fromIntegral off) seektype
+ where
+    seektype :: DWORD
+    seektype = case mode of
+                   AbsoluteSeek -> #{const FILE_BEGIN}
+                   RelativeSeek -> #{const FILE_CURRENT}
+                   SeekFromEnd  -> #{const FILE_END}
+
+handle_tell :: RawHandle a => a -> IO Integer
+handle_tell hwnd =
+   fromIntegral `fmap`
+      (throwErrnoIfMinus1Retry "GHC.IO.Handle.handle_tell" $
+          c_get_file_pointer (toHANDLE hwnd))
+
+handle_set_size :: RawHandle a => a -> Integer -> IO ()
+handle_set_size hwnd size =
+  throwErrnoIf_ not "GHC.IO.Handle.handle_set_size" $
+      c_set_file_size (toHANDLE hwnd) (fromIntegral size)
+
+handle_get_size :: RawHandle a => a -> IO Integer
+handle_get_size hwnd =
+   fromIntegral `fmap`
+      (throwErrnoIfMinus1Retry "GHC.IO.Handle.handle_set_size" $
+          c_get_file_size (toHANDLE hwnd))
+
+handle_set_echo :: RawHandle a => a -> Bool -> IO ()
+handle_set_echo hwnd value =
+  throwErrnoIf_ not "GHC.IO.Handle.handle_set_echo" $
+      c_set_console_echo (toHANDLE hwnd) value
+
+handle_get_echo :: RawHandle a => a -> IO Bool
+handle_get_echo = c_get_console_echo . toHANDLE
