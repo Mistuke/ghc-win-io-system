@@ -363,9 +363,7 @@ consoleWrite hwnd ptr bytes
             if not success
                then return False
                else do val <- fromIntegral <$> peek res
-                       if val/=bytes
-                          then return False
-                          else return True --c_flush_file_buffers (toHANDLE hwnd)
+                       return val/=bytes
 
 consoleWriteNonBlocking :: ConsoleHandle -> Ptr Word8 -> Int -> IO Int
 consoleWriteNonBlocking hwnd ptr bytes
@@ -374,8 +372,6 @@ consoleWriteNonBlocking hwnd ptr bytes
             c_write_console (toHANDLE hwnd) ptr (fromIntegral bytes)
                             res nullPtr
          val <- fromIntegral <$> peek res
-         throwErrnoIf_ not "GHC.IO.Handle.consoleWriteNonBlocking" $
-            c_flush_file_buffers (toHANDLE hwnd)
          return val
 
 consoleRead :: ConsoleHandle -> Ptr Word8 -> Int -> IO Int
