@@ -9,6 +9,7 @@
 #include <Winsock2.h>
 #include <windows.h>
 #include <io.h>
+#include <math.h>
 
 /* Import some functions defined in base.  */
 extern void maperrno(void);
@@ -380,9 +381,70 @@ bool __duplicate_handle (HANDLE hFile, HANDLE* hFileDup)
             return DuplicateHandle(GetCurrentProcess(),
                                 hFile,
                                 GetCurrentProcess(),
-                                &hFileDup,
+                                hFileDup,
                                 0,
                                 FALSE,
                                 DUPLICATE_SAME_ACCESS);
     }
+}
+
+bool __set_console_pointer (HANDLE hFile, int64_t pos, DWORD moveMethod)
+{
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    if(!GetConsoleScreenBufferInfo (hFile, &info))
+        return false;
+
+    COORD point;
+    switch (moveMethod)
+    {
+        case FILE_END:
+          {
+              int64_t end = info.dwSize.X * info.dwSize.Y;
+              pos = end + pos;
+              point = (COORD) { pos % info.dwSize.X, pos / info.dwSize.X };
+              break;
+          }
+        case FILE_CURRENT:
+          {
+              int64_t current = (info.dwCursorPosition.Y * info.dwSize.X)
+                              + info.dwCursorPosition.X;
+              pos = current + pos;
+              point = (COORD) { pos % info.dwSize.X, pos / info.dwSize.X };
+              break;
+          }
+        case FILE_BEGIN:
+        default:
+          point = (COORD) { pos % info.dwSize.X, pos / info.dwSize.X };
+          break;
+    }
+
+    return SetConsoleCursorPosition (hFile, point);
+}
+
+int64_t __get_console_pointer (HANDLE hFile)
+{
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    if(!GetConsoleScreenBufferInfo (hFile, &info))
+        return -1;
+
+    return (info.dwCursorPosition.Y * info.dwSize.X) + info.dwCursorPosition.X;
+}
+
+int64_t __get_console_buffer_size (HANDLE hFile)
+{
+    CONSOLE_SCREEN_BUFFER_INFO ret;
+    if (!GetConsoleScreenBufferInfo(hFile, &ret))
+      return -1;
+
+    return ret.dwSize.X * ret.dwSize.Y;
+}
+
+bool __set_console_buffer_size (HANDLE hFile, int64_t size)
+{
+    CONSOLE_SCREEN_BUFFER_INFO ret;
+    if (!GetConsoleScreenBufferInfo(hFile, &ret))
+      return false;
+
+    COORD sz = {ret.dwSize.X, (int)ceil(size / ret.dwSize.X)};
+    return SetConsoleScreenBufferSize (hFile, sz);
 }

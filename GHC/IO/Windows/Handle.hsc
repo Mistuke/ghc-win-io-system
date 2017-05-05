@@ -36,22 +36,11 @@ module GHC.IO.Windows.Handle
 ##include "windows_cconv.h"
 
 import Prelude hiding (readFile)
-import Control.Applicative ((<$>))
-import Control.Monad (when)
 import Data.Bits ((.|.))
-import Data.ByteString hiding (readFile)
-import qualified Data.ByteString as BS
-import Data.ByteString.Internal (createAndTrim)
 import Data.Word (Word8)
 
 import GHC.Base
-import GHC.Num
-import GHC.Real
-import GHC.Show
-import GHC.Enum
 
-import GHC.IO
-import GHC.IO.IOMode
 import GHC.IO.Buffer
 import GHC.IO.BufferedIO
 import qualified GHC.IO.Device
@@ -64,7 +53,6 @@ import Foreign.Marshal.Alloc (alloca)
 import Foreign.Marshal.Array (allocaArray, withArray)
 import Foreign.Storable (peek)
 import qualified GHC.Event.Windows as Mgr
-import qualified GHC.Event.Windows.FFI as FFI
 
 import System.Win32.Types (LPCTSTR, LPVOID, LPDWORD, DWORD, HANDLE, BOOL,
                            nullHANDLE, failIf, iNVALID_HANDLE_VALUE,
@@ -115,37 +103,35 @@ instance RawHandle ConsoleHandle where
 
 -- | @since 4.11.0.0
 instance GHC.IO.Device.IODevice Handle where
-  ready         = handle_ready
-  close         = handle_close
-  isTerminal    = handle_is_console
-  isSeekable    = handle_is_seekable
-  seek          = handle_seek
-  tell          = handle_tell
-  getSize       = handle_get_size
-  setSize       = handle_set_size
-  setEcho       = handle_set_echo
-  getEcho       = handle_get_echo
-  setRaw        = handle_set_buffering
-  devType       = handle_dev_type
-  dup           = handle_duplicate
-  --dup2          = dup2
+  ready      = handle_ready
+  close      = handle_close
+  isTerminal = handle_is_console
+  isSeekable = handle_is_seekable
+  seek       = handle_seek
+  tell       = handle_tell
+  getSize    = handle_get_size
+  setSize    = handle_set_size
+  setEcho    = handle_set_echo
+  getEcho    = handle_get_echo
+  setRaw     = handle_set_buffering
+  devType    = handle_dev_type
+  dup        = handle_duplicate
 
 -- | @since 4.11.0.0
 instance GHC.IO.Device.IODevice ConsoleHandle where
-  ready         = handle_ready
-  close         = handle_close . convertHandle
-  isTerminal    = handle_is_console
-  isSeekable    = handle_is_seekable
-  --seek          = seek
-  --tell          = tell
-  --getSize       = getSize
-  --setSize       = setSize
-  setEcho       = handle_set_echo
-  getEcho       = handle_get_echo
-  setRaw        = handle_set_buffering
-  devType       = handle_dev_type
-  dup           = handle_duplicate
-  --dup2          = dup2
+  ready      = handle_ready
+  close      = handle_close . convertHandle
+  isTerminal = handle_is_console
+  isSeekable = handle_is_seekable
+  seek       = handle_console_seek
+  tell       = handle_console_tell
+  getSize    = handle_get_console_size
+  setSize    = handle_set_console_size
+  setEcho    = handle_set_echo
+  getEcho    = handle_get_echo
+  setRaw     = handle_set_buffering
+  devType    = handle_dev_type
+  dup        = handle_duplicate
 
 -- Default sequential read buffer size.
 -- for Windows 8k seems to be the optimal
@@ -242,6 +228,18 @@ foreign import ccall safe "__set_file_size"
 
 foreign import ccall safe "__duplicate_handle"
   c_duplicate_handle :: HANDLE -> Ptr HANDLE -> IO BOOL
+
+foreign import ccall safe "__set_console_pointer"
+  c_set_console_pointer :: HANDLE -> CLong -> DWORD -> IO BOOL
+
+foreign import ccall safe "__get_console_pointer"
+  c_get_console_pointer :: HANDLE -> IO CLong
+
+foreign import ccall safe "__get_console_buffer_size"
+  c_get_console_buffer_size :: HANDLE -> IO CLong
+
+foreign import ccall safe "__set_console_buffer_size"
+  c_set_console_buffer_size :: HANDLE -> CLong -> IO BOOL
 
 type LPSECURITY_ATTRIBUTES = LPVOID
 
@@ -346,7 +344,7 @@ test2 = do hwnd <- openFile "r:\\hello.txt"
 
 test3 :: IO Int
 test3 = do hwnd <- openFile2 "r:\\hello2.txt"
-           let vals = fmap fromIntegral [1..30000]
+           let vals = fmap fromIntegral ([1..30000] :: [Int])
            let num = Prelude.length vals
            bytes <- withArray vals $ \ptr -> hwndWrite hwnd ptr num
            closeFile hwnd
@@ -458,3 +456,31 @@ handle_set_buffering :: RawHandle a => a -> Bool -> IO ()
 handle_set_buffering hwnd value =
   throwErrnoIf_ not "GHC.IO.Handle.handle_set_buffering" $
       c_set_console_buffering (toHANDLE hwnd) value
+
+handle_console_seek :: RawHandle a => a -> SeekMode -> Integer -> IO ()
+handle_console_seek hwnd mode off =
+  throwErrnoIf_ not "GHC.IO.Handle.handle_console_seek" $
+      c_set_console_pointer (toHANDLE hwnd) (fromIntegral off) seektype
+ where
+    seektype :: DWORD
+    seektype = case mode of
+                   AbsoluteSeek -> #{const FILE_BEGIN}
+                   RelativeSeek -> #{const FILE_CURRENT}
+                   SeekFromEnd  -> #{const FILE_END}
+
+handle_console_tell :: RawHandle a => a -> IO Integer
+handle_console_tell hwnd =
+   fromIntegral `fmap`
+      (throwErrnoIfMinus1Retry "GHC.IO.Handle.handle_console_tell" $
+          c_get_console_pointer (toHANDLE hwnd))
+
+handle_set_console_size :: RawHandle a => a -> Integer -> IO ()
+handle_set_console_size hwnd size =
+  throwErrnoIf_ not "GHC.IO.Handle.handle_set_console_size" $
+      c_set_console_buffer_size (toHANDLE hwnd) (fromIntegral size)
+
+handle_get_console_size :: RawHandle a => a -> IO Integer
+handle_get_console_size hwnd =
+   fromIntegral `fmap`
+      (throwErrnoIfMinus1Retry "GHC.IO.Handle.handle_get_console_size" $
+          c_get_console_buffer_size (toHANDLE hwnd))
