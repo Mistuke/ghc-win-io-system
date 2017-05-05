@@ -1,7 +1,7 @@
-{-# LANGUAGE Trustworthy #-}
-{-# LANGUAGE CPP #-}
+{-# LANGUAGE Trustworthy       #-}
+{-# LANGUAGE CPP               #-}
 {-# LANGUAGE NoImplicitPrelude #-}
-{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE BangPatterns      #-}
 -- Whether there are identities depends on the platform
 {-# OPTIONS_HADDOCK hide #-}
 
@@ -26,6 +26,7 @@ module GHC.IO.Windows.Handle
    test,
    test2,
    test3,
+   testOutput,
    -- * Standard Handles
    stdin,
    stdout,
@@ -58,6 +59,8 @@ import System.Win32.Types (LPCTSTR, LPVOID, LPDWORD, DWORD, HANDLE, BOOL,
                            nullHANDLE, failIf, iNVALID_HANDLE_VALUE,
                            failIfFalse_, failIf_)
 import qualified System.Win32.Types as Win32
+import qualified Data.ByteString.Char8 as C
+import qualified Data.ByteString as B
 
 -- -----------------------------------------------------------------------------
 -- The Windows IO device handles
@@ -84,6 +87,13 @@ instance GHC.IO.Device.RawIO Handle where
   readNonBlocking  = hwndReadNonBlocking
   write            = hwndWrite
   writeNonBlocking = hwndWriteNonBlocking
+
+-- | @since 4.11.0.0
+instance GHC.IO.Device.RawIO ConsoleHandle where
+  read             = consoleRead
+  readNonBlocking  = consoleReadNonBlocking
+  write            = consoleWrite
+  writeNonBlocking = consoleWriteNonBlocking
 
 -- | Generalize a way to get and create handles.
 class RawHandle a where
@@ -148,6 +158,15 @@ instance BufferedIO Handle where
   flushWriteBuffer     = writeBuf
   flushWriteBuffer0    = writeBufNonBlocking
 
+-- | @since 4.11.0.0
+-- See libraries/base/GHC/IO/BufferedIO.hs
+instance BufferedIO ConsoleHandle where
+  newBuffer _dev state = newByteBuffer dEFAULT_BUFFER_SIZE state
+  fillReadBuffer       = readBuf
+  fillReadBuffer0      = readBufNonBlocking
+  flushWriteBuffer     = writeBuf
+  flushWriteBuffer0    = writeBufNonBlocking
+
 -- -----------------------------------------------------------------------------
 -- Standard I/O handles
 
@@ -205,9 +224,6 @@ foreign import ccall safe "__set_console_echo"
 foreign import ccall safe "__get_console_echo"
     c_get_console_echo :: HANDLE -> IO BOOL
 
-foreign import ccall safe "__flush_input_console"
-    c_flush_input_console :: HANDLE -> IO BOOL
-
 foreign import ccall safe "__close_handle"
     c_close_handle :: HANDLE -> IO ()
 
@@ -240,6 +256,17 @@ foreign import ccall safe "__get_console_buffer_size"
 
 foreign import ccall safe "__set_console_buffer_size"
   c_set_console_buffer_size :: HANDLE -> CLong -> IO BOOL
+
+foreign import WINDOWS_CCONV unsafe "windows.h ReadConsoleW"
+  c_read_console :: HANDLE -> Ptr Word8 -> DWORD -> Ptr DWORD -> Ptr ()
+                 -> IO BOOL
+
+foreign import WINDOWS_CCONV unsafe "windows.h WriteConsoleW"
+  c_write_console :: HANDLE -> Ptr Word8 -> DWORD -> Ptr DWORD -> Ptr ()
+                  -> IO BOOL
+
+foreign import WINDOWS_CCONV unsafe "windows.h FlushFileBuffers"
+  c_flush_file_buffers :: HANDLE -> IO BOOL
 
 type LPSECURITY_ATTRIBUTES = LPVOID
 
@@ -327,6 +354,41 @@ hwndWriteNonBlocking hwnd ptr bytes
         | err == 0  = Mgr.ioSuccess $ fromIntegral dwBytes
         | otherwise = Mgr.ioFailed err
 
+consoleWrite :: ConsoleHandle -> Ptr Word8 -> Int -> IO ()
+consoleWrite hwnd ptr bytes
+  = alloca $ \res ->
+      do throwErrnoIf_ not "GHC.IO.Handle.consoleWrite" $ do
+            success <- c_write_console (toHANDLE hwnd) ptr (fromIntegral bytes)
+                                       res nullPtr
+            if not success
+               then return False
+               else do val <- fromIntegral <$> peek res
+                       if val/=bytes
+                          then return False
+                          else return True --c_flush_file_buffers (toHANDLE hwnd)
+
+consoleWriteNonBlocking :: ConsoleHandle -> Ptr Word8 -> Int -> IO Int
+consoleWriteNonBlocking hwnd ptr bytes
+  = alloca $ \res ->
+      do throwErrnoIf_ not "GHC.IO.Handle.consoleWriteNonBlocking" $
+            c_write_console (toHANDLE hwnd) ptr (fromIntegral bytes)
+                            res nullPtr
+         val <- fromIntegral <$> peek res
+         throwErrnoIf_ not "GHC.IO.Handle.consoleWriteNonBlocking" $
+            c_flush_file_buffers (toHANDLE hwnd)
+         return val
+
+consoleRead :: ConsoleHandle -> Ptr Word8 -> Int -> IO Int
+consoleRead hwnd ptr bytes
+  = alloca $ \res ->
+      do throwErrnoIf_ not "GHC.IO.Handle.consoleRead" $
+            c_read_console (toHANDLE hwnd) ptr (fromIntegral bytes)
+                           res nullPtr
+         fromIntegral <$> peek res
+
+consoleReadNonBlocking :: ConsoleHandle -> Ptr Word8 -> Int -> IO (Maybe Int)
+consoleReadNonBlocking hwnd ptr bytes = Just <$> consoleRead hwnd ptr bytes
+
 -- -----------------------------------------------------------------------------
 -- opening files
 
@@ -346,7 +408,7 @@ test3 :: IO Int
 test3 = do hwnd <- openFile2 "r:\\hello2.txt"
            let vals = fmap fromIntegral ([1..30000] :: [Int])
            let num = Prelude.length vals
-           bytes <- withArray vals $ \ptr -> hwndWrite hwnd ptr num
+           _ <- withArray vals $ \ptr -> hwndWrite hwnd ptr num
            closeFile hwnd
            return num
 
@@ -379,6 +441,11 @@ openFile2 fp = do h <- createFile
                                       #{const CREATE_ALWAYS}
                                       #{const FILE_FLAG_OVERLAPPED}
                                       nullHANDLE
+
+testOutput :: String -> IO ()
+testOutput str = withArray (B.unpack $ C.pack str) $
+   \ptr -> do h <- stdout
+              consoleWrite h ptr (length str)
 
 -- -----------------------------------------------------------------------------
 -- Operations on file handles
