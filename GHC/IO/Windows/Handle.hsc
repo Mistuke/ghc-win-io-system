@@ -59,8 +59,6 @@ import System.Win32.Types (LPCTSTR, LPVOID, LPDWORD, DWORD, HANDLE, BOOL,
                            nullHANDLE, failIf, iNVALID_HANDLE_VALUE,
                            failIfFalse_, failIf_)
 import qualified System.Win32.Types as Win32
-import qualified Data.ByteString.Char8 as C
-import qualified Data.ByteString as B
 
 -- -----------------------------------------------------------------------------
 -- The Windows IO device handles
@@ -265,9 +263,6 @@ foreign import WINDOWS_CCONV unsafe "windows.h WriteConsoleW"
   c_write_console :: HANDLE -> Ptr Word8 -> DWORD -> Ptr DWORD -> Ptr ()
                   -> IO BOOL
 
-foreign import WINDOWS_CCONV unsafe "windows.h FlushFileBuffers"
-  c_flush_file_buffers :: HANDLE -> IO BOOL
-
 type LPSECURITY_ATTRIBUTES = LPVOID
 
 -- -----------------------------------------------------------------------------
@@ -363,7 +358,7 @@ consoleWrite hwnd ptr bytes
             if not success
                then return False
                else do val <- fromIntegral <$> peek res
-                       return val/=bytes
+                       return $ val==bytes
 
 consoleWriteNonBlocking :: ConsoleHandle -> Ptr Word8 -> Int -> IO Int
 consoleWriteNonBlocking hwnd ptr bytes
@@ -439,9 +434,16 @@ openFile2 fp = do h <- createFile
                                       nullHANDLE
 
 testOutput :: String -> IO ()
-testOutput str = withArray (B.unpack $ C.pack str) $
-   \ptr -> do h <- stdout
-              consoleWrite h ptr (length str)
+testOutput str = withCWString str $ \str' -> do
+                    h <- stdout
+                    handle_is_console h >>= print
+                    handle_is_seekable h >>= print
+                    pos <- handle_console_tell h
+                    print pos
+                    handle_get_console_size h >>= print
+                    consoleWrite h (castPtr str') (fromIntegral $ length str)
+                    handle_console_seek h RelativeSeek (-1)
+                    consoleWrite h (castPtr str') (fromIntegral $ length str)
 
 -- -----------------------------------------------------------------------------
 -- Operations on file handles

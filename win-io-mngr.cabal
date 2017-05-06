@@ -35,6 +35,7 @@ library
         Network.Winsock
         System.IO.IOCP
         GHC.IO.Windows.Handle
+        GHC.IO.Windows.Encoding
 
     c-sources:
         cbits/Winsock.c
